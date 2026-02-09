@@ -1,4 +1,6 @@
 import os
+import re
+import base64
 from datetime import datetime, timedelta
 from playwright.sync_api import sync_playwright
 
@@ -19,7 +21,6 @@ LOGIN_URL = (
     "microsite=itravel&keepurl=true&url=%2Fhome%3FtripId%3D64"
 )
 
-# Vista de reservas / servicios
 BOOKINGS_URL = "https://mitika.travel/admin/bookings/List.xhtml?reset=true"
 
 USERNAME = os.environ.get("MITIKA_USERNAME")
@@ -33,7 +34,30 @@ DATE_FROM = (TODAY + timedelta(days=10)).strftime("%d/%m/%Y")
 DATE_TO = (TODAY + timedelta(days=360)).strftime("%d/%m/%Y")
 STAMP = TODAY.strftime("%Y_%m_%d")
 
-SERVICES_FILE = os.path.join(OUTPUT_DIR, f"SERVICES_{STAMP}.xlsx")
+EXCEL_FILE = os.path.join(OUTPUT_DIR, f"BOOKINGS_{STAMP}.xlsx")
+
+# ======================================================
+# HELPERS
+# ======================================================
+
+BASE64_REGEX = re.compile(
+    r"data:application/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet;base64,([A-Za-z0-9+/=]+)"
+)
+
+def extract_excel_from_response(text: str, output_path: str):
+    """
+    Busca el data:application/...;base64 dentro de la response,
+    lo decodifica y guarda el XLSX
+    """
+    match = BASE64_REGEX.search(text)
+    if not match:
+        raise RuntimeError("No se encontró contenido base64 del Excel en la response")
+
+    excel_b64 = match.group(1)
+    excel_bytes = base64.b64decode(excel_b64)
+
+    with open(output_path, "wb") as f:
+        f.write(excel_bytes)
 
 # ======================================================
 # STEPS
@@ -86,21 +110,6 @@ def apply_filters(page):
         {"fromDate": DATE_FROM, "toDate": DATE_TO},
     )
 
-    # Buscar = Services / Alojamiento (si aplica)
-    page.evaluate(
-        """
-        () => {
-            const select = document.querySelector(
-                "select[name='search-form:booking-filters:searchType']"
-            );
-            if (select) {
-                select.value = "SERVICES";
-                select.dispatchEvent(new Event("change", { bubbles: true }));
-            }
-        }
-        """
-    )
-
     # Estado = solo Reservado
     page.evaluate(
         """
@@ -122,17 +131,14 @@ def apply_filters(page):
     page.wait_for_load_state("networkidle")
 
 
-def export_services_excel(page, filepath):
+def export_excel_from_base64(page):
     """
-    Export correcto PrimeFaces:
-    ejecuta EXACTAMENTE el onclick real del <a> Excel
-    y captura la respuesta HTTP (no download)
+    Dispara el export PrimeFaces y captura la response AJAX
+    para extraer el Excel embebido en base64
     """
+
     with page.expect_response(
-        lambda r: (
-            "content-disposition" in r.headers
-            and "attachment" in r.headers["content-disposition"].lower()
-        ),
+        lambda r: r.url.endswith("/admin/bookings/List.xhtml") and r.request.method == "POST",
         timeout=120000,
     ) as response_info:
         page.evaluate(
@@ -151,18 +157,16 @@ def export_services_excel(page, filepath):
         )
 
     response = response_info.value
-    content = response.body()
+    body = response.text()
 
-    with open(filepath, "wb") as f:
-        f.write(content)
-
+    extract_excel_from_response(body, EXCEL_FILE)
 
 # ======================================================
 # MAIN
 # ======================================================
 
 def run():
-    print("Starting SERVICES export (PrimeFaces-safe)")
+    print("Starting Mitika Excel export (base64 mode)")
     print(f"Output directory: {OUTPUT_DIR}")
     print(f"Dates: {DATE_FROM} → {DATE_TO}")
 
@@ -173,14 +177,13 @@ def run():
 
         login(page)
         apply_filters(page)
-        export_services_excel(page, SERVICES_FILE)
+        export_excel_from_base64(page)
 
         context.close()
         browser.close()
 
     print("DONE")
-    print(f"- {SERVICES_FILE}")
-
+    print(f"- {EXCEL_FILE}")
 
 if __name__ == "__main__":
     run()
