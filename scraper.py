@@ -57,7 +57,7 @@ def apply_filters(page):
     page.goto(BOOKINGS_URL, timeout=60000)
     page.wait_for_load_state("networkidle")
 
-    # Open filters panel (JS click – REQUIRED)
+    # Open filters panel
     page.evaluate(
         """
         () => {
@@ -69,7 +69,7 @@ def apply_filters(page):
 
     page.wait_for_selector("#search-form", timeout=30000)
 
-    # Clear creation dates (JS click – REQUIRED)
+    # Clear creation dates
     page.evaluate(
         """
         () => {
@@ -79,10 +79,9 @@ def apply_filters(page):
         """
     )
 
-    # Set Fecha de salida (PrimeFaces-safe)
+    # Set departure dates (CORRECT Playwright Python pattern)
     page.evaluate(
-        """
-        (fromDate, toDate) => {
+        """({ fromDate, toDate }) => {
             const f = document.getElementById(
                 "search-form:booking-filters:departureDateFrom_input"
             );
@@ -90,15 +89,18 @@ def apply_filters(page):
                 "search-form:booking-filters:departureDateTo_input"
             );
 
-            f.value = fromDate;
-            t.value = toDate;
+            if (f && t) {
+                f.value = fromDate;
+                t.value = toDate;
 
-            f.dispatchEvent(new Event("change", { bubbles: true }));
-            t.dispatchEvent(new Event("change", { bubbles: true }));
-        }
-        """,
-        DATE_FROM,
-        DATE_TO,
+                f.dispatchEvent(new Event("change", { bubbles: true }));
+                t.dispatchEvent(new Event("change", { bubbles: true }));
+            }
+        }""",
+        {
+            "fromDate": DATE_FROM,
+            "toDate": DATE_TO,
+        },
     )
 
     # Buscar = Alojamiento
@@ -107,7 +109,7 @@ def apply_filters(page):
         "HOTELS",
     )
 
-    # Estado = Reservado (JS – no viewport dependency)
+    # Estado = Reservado
     page.evaluate(
         """
         () => {
@@ -165,10 +167,10 @@ def run():
         login(page)
         apply_filters(page)
 
-        # Export BOOKINGS (summary)
+        # Export BOOKINGS
         export_excel(page, BOOKINGS_FILE)
 
-        # Export SERVICES (detail)
+        # Export SERVICES
         page.goto(SERVICES_URL, timeout=60000)
         page.wait_for_load_state("networkidle")
         export_excel(page, SERVICES_FILE)
