@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from playwright.sync_api import sync_playwright
 
 # ======================================================
-# PATHS (PORTABLE / CI-SAFE)
+# PATHS
 # ======================================================
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -56,29 +56,27 @@ def apply_filters(page):
     page.goto(BOOKINGS_URL, timeout=60000)
     page.wait_for_load_state("networkidle")
 
-    # Open advanced filters
+    # Abrir filtros avanzados
     page.evaluate(
         """
         () => {
-            const btn = document.querySelector("#clickOtherFilters");
-            if (btn) btn.click();
+            document.querySelector("#clickOtherFilters")?.click();
         }
         """
     )
 
-    page.wait_for_selector("#search-form", timeout=60000)
+    page.wait_for_timeout(3000)
 
-    # Clear creation dates
+    # Limpiar fechas de creación
     page.evaluate(
         """
         () => {
-            const btn = document.querySelector("button.dev-clear-dates");
-            if (btn) btn.click();
+            document.querySelector("button.dev-clear-dates")?.click();
         }
         """
     )
 
-    # Set departure dates (Playwright Python correct pattern)
+    # Setear fechas de salida
     page.evaluate(
         """({ fromDate, toDate }) => {
             const f = document.getElementById(
@@ -87,7 +85,6 @@ def apply_filters(page):
             const t = document.getElementById(
                 "search-form:booking-filters:departureDateTo_input"
             );
-
             if (f && t) {
                 f.value = fromDate;
                 t.value = toDate;
@@ -101,13 +98,7 @@ def apply_filters(page):
         },
     )
 
-    # Wait for search type select (CI-safe)
-    page.wait_for_selector(
-        "select[name='search-form:booking-filters:searchType']",
-        timeout=60000,
-    )
-
-    # Set search type = HOTELS via JS (robust in headless)
+    # 🔑 SETEAR TIPO = HOTELS (SIN ESPERAR VISIBILIDAD)
     page.evaluate(
         """
         () => {
@@ -135,12 +126,11 @@ def apply_filters(page):
         """
     )
 
-    # Apply filters
+    # Aplicar filtros
     page.evaluate(
         """
         () => {
-            const btn = document.querySelector("button.applyFilters");
-            if (btn) btn.click();
+            document.querySelector("button.applyFilters")?.click();
         }
         """
     )
@@ -153,10 +143,7 @@ def export_excel(page, filepath):
         page.evaluate(
             """
             () => {
-                const btn =
-                    document.querySelector("button:has(.icon-download)") ||
-                    document.querySelector("button:has-text('Exportar')");
-                if (btn) btn.click();
+                document.querySelector("button:has(.icon-download)")?.click();
             }
             """
         )
@@ -181,10 +168,8 @@ def run():
         login(page)
         apply_filters(page)
 
-        # Export BOOKINGS
         export_excel(page, BOOKINGS_FILE)
 
-        # Export SERVICES
         page.goto(SERVICES_URL, timeout=60000)
         page.wait_for_load_state("networkidle")
         export_excel(page, SERVICES_FILE)
