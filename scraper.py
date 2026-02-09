@@ -36,10 +36,9 @@ BOOKINGS_FILE = os.path.join(OUTPUT_DIR, f"BOOKINGS_{STAMP}.xlsx")
 
 
 def screenshot(page, name):
-    """Save a diagnostic screenshot to output dir."""
     path = os.path.join(OUTPUT_DIR, f"debug_{name}_{STAMP}.png")
     page.screenshot(path=path, full_page=True)
-    print(f"  📸 Screenshot: {path}")
+    print(f"  📸 {name}")
 
 
 # ======================================================
@@ -66,7 +65,6 @@ def login(page):
     screenshot(page, "01_after_login")
 
     if "login" in page.url.lower():
-        screenshot(page, "01_login_FAILED")
         raise RuntimeError(f"Login failed. Still on: {page.url}")
 
     print(f"  ✅ Logged in. URL: {page.url}")
@@ -78,249 +76,229 @@ def apply_filters(page):
     page.wait_for_load_state("networkidle")
     screenshot(page, "02_bookings_loaded")
 
-    # ── DIAGNOSTIC: Dump all buttons and filter-related elements ──
-    diag = page.evaluate("""() => {
-        const info = {};
-
-        info.buttons = Array.from(document.querySelectorAll('button')).map(b => ({
-            id: b.id || '',
-            text: b.textContent.trim().substring(0, 60),
-            classes: b.className,
-            visible: b.offsetParent !== null
-        }));
-
-        info.filtrosButton = Array.from(document.querySelectorAll('button, a, div, span'))
-            .filter(e => e.textContent.trim().includes('Filtro'))
-            .map(e => ({
-                tag: e.tagName,
-                id: e.id || '',
-                text: e.textContent.trim().substring(0, 60),
-                classes: e.className
-            }));
-
-        info.clickOtherFilters = !!document.querySelector('#clickOtherFilters');
-        info.devClearDates = !!document.querySelector('button.dev-clear-dates');
-        info.applyFilters = !!document.querySelector('button.applyFilters');
-
-        info.filterElements = Array.from(document.querySelectorAll('[id*="filter" i], [class*="filter" i]'))
-            .map(e => ({
-                tag: e.tagName,
-                id: e.id || '',
-                classes: e.className.substring(0, 80)
-            })).slice(0, 20);
-
-        return info;
-    }""")
-
-    print(f"  #clickOtherFilters exists: {diag['clickOtherFilters']}")
-    print(f"  button.dev-clear-dates exists: {diag['devClearDates']}")
-    print(f"  button.applyFilters exists: {diag['applyFilters']}")
-    print(f"  Filtros-related elements: {len(diag['filtrosButton'])}")
-    for el in diag['filtrosButton']:
-        print(f"    <{el['tag']} id='{el['id']}' class='{el['classes']}'> {el['text']}")
-    print(f"  Filter-related elements: {len(diag['filterElements'])}")
-    for el in diag['filterElements'][:10]:
-        print(f"    <{el['tag']} id='{el['id']}' class='{el['classes'][:60]}>")
-
-    # ── Try clicking the Filtros button (visible in screenshots) ──
-    try:
-        filtros_btn = page.locator("button:has-text('Filtros'), a:has-text('Filtros')").first
-        if filtros_btn.count():
-            print("  Clicking 'Filtros' button...")
-            filtros_btn.click()
-            page.wait_for_timeout(3000)
-            screenshot(page, "03_after_filtros_click")
-        else:
-            print("  ⚠️  No 'Filtros' button found via locator")
-    except Exception as e:
-        print(f"  ⚠️  Error clicking Filtros: {e}")
-
-    # Also try the old selector
-    page.evaluate("""() => document.querySelector("#clickOtherFilters")?.click()""")
+    # ── Step 1: Open the Filtros sidebar ──
+    print("  Opening filters sidebar...")
+    page.locator("a.dev-open-filters").click()
     page.wait_for_timeout(2000)
+    screenshot(page, "03_filters_opened")
 
-    # ── DIAGNOSTIC: What's in the filters panel now? ──
-    filter_panel = page.evaluate("""() => {
-        const info = {};
-
-        info.selects = Array.from(document.querySelectorAll('select')).map(s => ({
-            name: s.name || '',
-            id: s.id || '',
-            options: Array.from(s.options).map(o => o.value + '=' + o.text).slice(0, 10),
-            visible: s.offsetParent !== null
-        }));
-
-        info.dateInputs = Array.from(document.querySelectorAll('input[id*="date" i], input[id*="Date" i], input[id*="fecha" i]'))
-            .map(i => ({
-                id: i.id || '',
-                name: i.name || '',
-                value: i.value || '',
-                visible: i.offsetParent !== null
-            }));
-
-        info.checkboxes = Array.from(document.querySelectorAll('.ui-chkbox, input[type="checkbox"]'))
-            .map(c => {
-                const parent = c.closest('tr, li, div, label');
-                return {
-                    id: c.id || '',
-                    text: parent ? parent.textContent.trim().substring(0, 60) : '',
-                    classes: c.className
-                };
-            }).slice(0, 20);
-
-        info.statusElements = Array.from(document.querySelectorAll('[id*="status" i], [id*="estado" i], [id*="state" i]'))
-            .map(e => ({
-                tag: e.tagName,
-                id: e.id || '',
-                text: e.textContent.trim().substring(0, 80)
-            })).slice(0, 10);
-
-        return info;
-    }""")
-
-    print(f"\n  📋 SELECT elements: {len(filter_panel['selects'])}")
-    for s in filter_panel['selects']:
-        print(f"    <select name='{s['name']}' id='{s['id']}' visible={s['visible']}>")
-        for o in s['options'][:5]:
-            print(f"      {o}")
-
-    print(f"\n  📋 Date inputs: {len(filter_panel['dateInputs'])}")
-    for d in filter_panel['dateInputs']:
-        print(f"    <input id='{d['id']}' value='{d['value']}' visible={d['visible']}>")
-
-    print(f"\n  📋 Checkboxes: {len(filter_panel['checkboxes'])}")
-    for c in filter_panel['checkboxes'][:10]:
-        print(f"    id='{c['id']}' text='{c['text'][:50]}'")
-
-    print(f"\n  📋 Status-related elements: {len(filter_panel['statusElements'])}")
-    for s in filter_panel['statusElements']:
-        print(f"    <{s['tag']} id='{s['id']}'> {s['text'][:60]}")
-
-    screenshot(page, "04_filter_panel_state")
-
-    # ── Set departure dates ──
-    date_result = page.evaluate(
-        """({ fromDate, toDate }) => {
-            const ids = [
-                "search-form:booking-filters:departureDateFrom_input",
-                "search-form:booking-filters:departureDateTo_input"
-            ];
-            const found = ids.map(id => !!document.getElementById(id));
-            const f = document.getElementById(ids[0]);
-            const t = document.getElementById(ids[1]);
-            if (f && t) {
-                f.value = fromDate;
-                t.value = toDate;
-                f.dispatchEvent(new Event("change", { bubbles: true }));
-                t.dispatchEvent(new Event("change", { bubbles: true }));
+    # ── Step 2: Clear creation dates ──
+    print("  Clearing creation dates...")
+    # The "Eliminar fechas" button inside the creation date section
+    page.evaluate("""() => {
+        const buttons = document.querySelectorAll('button.dev-clear-dates, a.dev-clear-dates');
+        if (buttons.length > 0) {
+            buttons[0].click();
+            return;
+        }
+        // Fallback: find by text
+        const all = document.querySelectorAll('button, a');
+        for (const el of all) {
+            if (el.textContent.trim() === 'Eliminar fechas') {
+                el.click();
+                return;
             }
-            return { fromFound: found[0], toFound: found[1] };
+        }
+    }""")
+    page.wait_for_timeout(1000)
+
+    # Verify cleared
+    cleared = page.evaluate("""() => ({
+        from: document.getElementById('search-form:booking-filters:creationDateFrom_input')?.value || '',
+        to: document.getElementById('search-form:booking-filters:creationDateTo_input')?.value || ''
+    })""")
+    print(f"  Creation dates: from='{cleared['from']}', to='{cleared['to']}'")
+
+    # ── Step 3: Expand "Fecha de salida" and set departure dates ──
+    print("  Expanding 'Fecha de salida'...")
+    # Click the accordion header text
+    page.locator("text=Fecha de salida").first.click()
+    page.wait_for_timeout(1500)
+
+    # Now the departure date inputs should be visible — set values via JS
+    print(f"  Setting departure dates: {DATE_FROM} → {DATE_TO}")
+    page.evaluate(
+        """({ fromDate, toDate }) => {
+            const fInput = document.getElementById('search-form:booking-filters:departureDateFrom_input');
+            const tInput = document.getElementById('search-form:booking-filters:departureDateTo_input');
+
+            function setDateValue(input, val) {
+                if (!input) return;
+                // Set the value via native setter to trigger PrimeFaces
+                const nativeSetter = Object.getOwnPropertyDescriptor(
+                    window.HTMLInputElement.prototype, 'value'
+                ).set;
+                nativeSetter.call(input, val);
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+                // Also try focusing and blurring to trigger PrimeFaces datepicker
+                input.dispatchEvent(new Event('focus', { bubbles: true }));
+                input.dispatchEvent(new Event('blur', { bubbles: true }));
+            }
+
+            setDateValue(fInput, fromDate);
+            setDateValue(tInput, toDate);
         }""",
         {"fromDate": DATE_FROM, "toDate": DATE_TO},
     )
-    print(f"\n  Date inputs found: from={date_result['fromFound']}, to={date_result['toFound']}")
+    page.wait_for_timeout(1000)
 
-    # ── Set searchType = HOTELS ──
-    search_result = page.evaluate("""() => {
-        const select = document.querySelector("select[name='search-form:booking-filters:searchType']");
-        if (select) {
-            select.value = "HOTELS";
-            select.dispatchEvent(new Event("change", { bubbles: true }));
-            return "set_to_HOTELS";
-        }
-        return "not_found";
+    # Verify
+    dep_dates = page.evaluate("""() => ({
+        from: document.getElementById('search-form:booking-filters:departureDateFrom_input')?.value || '',
+        to: document.getElementById('search-form:booking-filters:departureDateTo_input')?.value || ''
+    })""")
+    print(f"  Departure dates set: from='{dep_dates['from']}', to='{dep_dates['to']}'")
+    screenshot(page, "04_dates_set")
+
+    # ── Step 4: Scroll down in the filter sidebar to reach Estado ──
+    # Scroll the filter sidebar container
+    page.evaluate("""() => {
+        const scroller = document.querySelector('.c-hidden-aside__scroller') ||
+                         document.querySelector('#c-hidden-aside--booking-filters');
+        if (scroller) scroller.scrollTop = scroller.scrollHeight;
     }""")
-    print(f"  searchType: {search_result}")
+    page.wait_for_timeout(1000)
 
-    # ── Check "Reservado" ──
-    reservado_result = page.evaluate("""() => {
-        let clicked = 0;
-        let found = [];
-
-        // Strategy 1: labels
-        document.querySelectorAll("label").forEach(label => {
-            if (label.textContent.trim().includes("Reservado")) {
-                found.push("label: " + label.textContent.trim().substring(0, 40));
-                label.click();
-                clicked++;
+    # ── Step 5: Expand "Estado" accordion ──
+    print("  Expanding 'Estado' section...")
+    # The Estado section is inside the filter sidebar, might need to click to expand
+    page.evaluate("""() => {
+        // Find "Estado" text and click its parent accordion
+        const elements = document.querySelectorAll(
+            '#c-hidden-aside--booking-filters *'
+        );
+        for (const el of elements) {
+            if (el.children.length === 0 && el.textContent.trim() === 'Estado') {
+                // Click the closest clickable parent (the accordion header)
+                const clickTarget = el.closest('[role="button"], summary, details, h2, h3, div') || el;
+                clickTarget.click();
+                return 'clicked';
             }
-        });
-
-        // Strategy 2: PrimeFaces checkbox parents
-        if (!clicked) {
-            document.querySelectorAll(".ui-chkbox").forEach(chk => {
-                const parent = chk.closest("tr, li, div");
-                if (parent && parent.textContent.includes("Reservado")) {
-                    found.push("chkbox-parent: " + parent.textContent.trim().substring(0, 40));
-                    const box = chk.querySelector(".ui-chkbox-box");
-                    if (box) { box.click(); clicked++; }
-                }
-            });
         }
-
-        // Strategy 3: just report any "Reservado" text on page
-        if (!clicked) {
-            document.querySelectorAll("span, div, td, li").forEach(el => {
-                if (el.textContent.trim() === "Reservado" || el.textContent.trim() === "Reservado") {
-                    found.push(el.tagName + ": " + el.id + " / " + el.className);
-                }
-            });
-        }
-
-        return { clicked, found };
+        return 'not_found';
     }""")
-    print(f"  Reservado: clicked={reservado_result['clicked']}, found={reservado_result['found']}")
+    page.wait_for_timeout(1000)
 
-    # ── Apply filters ──
-    apply_result = page.evaluate("""() => {
-        const selectors = [
-            "button.applyFilters",
-            "[id*='applyFilter']",
-            "[id*='searchButton']",
-            "[id*='search-button']",
-            "[id*='btnSearch']",
-        ];
-        for (const sel of selectors) {
-            const el = document.querySelector(sel);
-            if (el) { el.click(); return "clicked: " + sel; }
+    # Also try direct locator click
+    try:
+        page.locator("#c-hidden-aside--booking-filters >> text=Estado").first.click()
+        page.wait_for_timeout(1000)
+    except Exception:
+        pass
+
+    screenshot(page, "05_estado_expanded")
+
+    # ── Step 6: Uncheck all statuses, keep only "Reservado" ──
+    # From the video: there are 8 status checkboxes, all checked by default
+    # statuses:0 = Reservado, :1 = Error de reserva, :2 = Pendiente,
+    # :3 = No reservado, :4 = Parcialmente reservado, :5 = Cancelado,
+    # :6 = Error en precio, :7 = Pendiente actualizar
+    print("  Setting status = Reservado only...")
+    status_result = page.evaluate("""() => {
+        const results = [];
+        const container = document.getElementById('dropdownStatus');
+        if (!container) return { error: 'dropdownStatus not found' };
+
+        // Get all PrimeFaces checkbox items within the status container
+        const checkboxes = container.querySelectorAll('.ui-chkbox');
+
+        for (const chk of checkboxes) {
+            const box = chk.querySelector('.ui-chkbox-box');
+            const icon = chk.querySelector('.ui-chkbox-icon');
+            const label = chk.closest('div, li, tr')?.querySelector('label');
+            const text = label?.textContent.trim() || '';
+            const isChecked = box?.classList.contains('ui-state-active') ||
+                              icon?.classList.contains('ui-icon-check');
+
+            if (text === 'Reservado') {
+                // Keep this one checked
+                if (!isChecked) {
+                    box?.click();
+                    results.push('checked: ' + text);
+                } else {
+                    results.push('already checked: ' + text);
+                }
+            } else if (text) {
+                // Uncheck everything else
+                if (isChecked) {
+                    box?.click();
+                    results.push('unchecked: ' + text);
+                }
+            }
         }
 
-        const btns = Array.from(document.querySelectorAll("button, a"));
-        for (const btn of btns) {
-            const t = btn.textContent.trim().toLowerCase();
-            if (t.includes("buscar") || t.includes("aplicar") || t.includes("search") || t.includes("apply")) {
+        // Fallback: try using the input elements directly
+        if (results.length === 0) {
+            const inputs = container.querySelectorAll('input[type="checkbox"]');
+            for (const input of inputs) {
+                const parent = input.closest('div');
+                const label = parent?.querySelector('label');
+                const text = label?.textContent.trim() || '';
+
+                if (text === 'Reservado') {
+                    if (!input.checked) {
+                        input.click();
+                        results.push('input-checked: ' + text);
+                    } else {
+                        results.push('input-already-checked: ' + text);
+                    }
+                } else if (text && input.checked) {
+                    input.click();
+                    results.push('input-unchecked: ' + text);
+                }
+            }
+        }
+
+        return results;
+    }""")
+    print(f"  Status changes: {status_result}")
+    screenshot(page, "06_status_set")
+
+    # ── Step 7: Click "Aplicar" ──
+    print("  Clicking Aplicar...")
+    page.evaluate("""() => {
+        const buttons = document.querySelectorAll('button, a');
+        for (const btn of buttons) {
+            if (btn.textContent.trim() === 'Aplicar') {
                 btn.click();
-                return "clicked by text: " + btn.textContent.trim().substring(0, 30);
+                return;
             }
         }
-
-        return "no_apply_button_found";
     }""")
-    print(f"  Apply filters: {apply_result}")
 
     page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(3000)
-    screenshot(page, "05_after_apply_filters")
+    page.wait_for_timeout(5000)
+    screenshot(page, "07_after_apply")
 
-    count = page.evaluate("""() => document.querySelectorAll("table tbody tr").length""")
-    print(f"  ✅ After filters. Table rows: {count}")
+    # Check results
+    result = page.evaluate("""() => {
+        const rows = document.querySelectorAll('table tbody tr');
+        const pager = document.querySelector('.ui-paginator-current');
+        return {
+            rowCount: rows.length,
+            pagerText: pager ? pager.textContent.trim() : 'no pager'
+        };
+    }""")
+    print(f"  ✅ After apply. Rows: {result['rowCount']}, Pager: {result['pagerText']}")
 
 
 def export_excel(page, exporter_id, filepath, label):
     print(f"[3/3] Export {label} → {filepath}")
 
     exists = page.evaluate(f'() => !!document.getElementById("{exporter_id}")')
-    print(f"  Exporter element exists: {exists}")
+    print(f"  Exporter exists: {exists}")
 
     if not exists:
+        # List all export-related elements
         snippet = page.evaluate("""() => {
             const els = document.querySelectorAll('[id*="export"], [id*="excel"], [id*="Export"]');
-            return Array.from(els).map(e => e.id).join('\\n') || 'none found';
+            return Array.from(els).map(e => e.id + ' (' + e.tagName + ')').join('\\n') || 'none';
         }""")
-        print(f"  ⚠️  Export-related elements:\\n{snippet}")
-        screenshot(page, f"export_missing_{label}")
+        print(f"  Export elements on page:\\n{snippet}")
+        screenshot(page, "export_missing")
 
-    # Strategy 1: click() + expect_download
+    # Strategy 1: click + expect_download
     try:
         print("  Strategy 1: el.click() + expect_download ...")
         with page.expect_download(timeout=30000) as dl_info:
@@ -334,7 +312,7 @@ def export_excel(page, exporter_id, filepath, label):
     except PwTimeout:
         print("  ⏱️  Strategy 1 timed out.")
 
-    # Strategy 2: PrimeFaces.ab() + expect_download
+    # Strategy 2: PrimeFaces.ab + expect_download
     try:
         print("  Strategy 2: PrimeFaces.ab() + expect_download ...")
         with page.expect_download(timeout=30000) as dl_info:
@@ -352,7 +330,7 @@ def export_excel(page, exporter_id, filepath, label):
 
     # Strategy 3: expect_response
     try:
-        print("  Strategy 3: PrimeFaces.ab() + expect_response ...")
+        print("  Strategy 3: expect_response ...")
         with page.expect_response(
             lambda r: "attachment" in r.headers.get("content-disposition", ""),
             timeout=60000,
@@ -372,7 +350,7 @@ def export_excel(page, exporter_id, filepath, label):
         print("  ⏱️  Strategy 3 timed out.")
 
     screenshot(page, f"export_FAILED_{label}")
-    raise RuntimeError(f"All export strategies failed for {label}. Check screenshots in {OUTPUT_DIR}")
+    raise RuntimeError(f"All export strategies failed for {label}")
 
 
 # ======================================================
