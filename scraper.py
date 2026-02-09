@@ -19,10 +19,8 @@ LOGIN_URL = (
     "microsite=itravel&keepurl=true&url=%2Fhome%3FtripId%3D64"
 )
 
-# 🔑 RESET DE ESTADO DE GRILLA (CLAVE PARA COLUMNAS COMPLETAS)
-BOOKINGS_URL = (
-    "https://mitika.travel/admin/bookings/List.xhtml?reset=true"
-)
+# Vista de reservas / servicios
+BOOKINGS_URL = "https://mitika.travel/admin/bookings/List.xhtml?reset=true"
 
 USERNAME = os.environ.get("MITIKA_USERNAME")
 PASSWORD = os.environ.get("MITIKA_PASSWORD")
@@ -35,7 +33,7 @@ DATE_FROM = (TODAY + timedelta(days=10)).strftime("%d/%m/%Y")
 DATE_TO = (TODAY + timedelta(days=360)).strftime("%d/%m/%Y")
 STAMP = TODAY.strftime("%Y_%m_%d")
 
-BOOKINGS_FILE = os.path.join(OUTPUT_DIR, f"BOOKINGS_{STAMP}.xlsx")
+SERVICES_FILE = os.path.join(OUTPUT_DIR, f"SERVICES_{STAMP}.xlsx")
 
 # ======================================================
 # STEPS
@@ -69,7 +67,7 @@ def apply_filters(page):
         "() => document.querySelector('button.dev-clear-dates')?.click()"
     )
 
-    # Fechas de salida (Desde / Hasta)
+    # Fechas de salida
     page.evaluate(
         """({ fromDate, toDate }) => {
             const f = document.getElementById(
@@ -86,6 +84,21 @@ def apply_filters(page):
             }
         }""",
         {"fromDate": DATE_FROM, "toDate": DATE_TO},
+    )
+
+    # Buscar = Services / Alojamiento (si aplica)
+    page.evaluate(
+        """
+        () => {
+            const select = document.querySelector(
+                "select[name='search-form:booking-filters:searchType']"
+            );
+            if (select) {
+                select.value = "SERVICES";
+                select.dispatchEvent(new Event("change", { bubbles: true }));
+            }
+        }
+        """
     )
 
     # Estado = solo Reservado
@@ -109,16 +122,39 @@ def apply_filters(page):
     page.wait_for_load_state("networkidle")
 
 
-def export_bookings(page):
-    # Exportar > Excel (BOOKINGS)
-    page.locator("button:has-text('Exportar')").click()
-    page.wait_for_timeout(1000)
+def export_services_excel(page, filepath):
+    """
+    Export correcto PrimeFaces:
+    ejecuta EXACTAMENTE el onclick real del <a> Excel
+    y captura la respuesta HTTP (no download)
+    """
+    with page.expect_response(
+        lambda r: (
+            "content-disposition" in r.headers
+            and "attachment" in r.headers["content-disposition"].lower()
+        ),
+        timeout=120000,
+    ) as response_info:
+        page.evaluate(
+            """
+            () => {
+                PrimeFaces.monitorDataExporterDownload(
+                    travelc.admin.blockPage,
+                    travelc.admin.unblockPage
+                );
+                PrimeFaces.ab({
+                    s: 'search-form:services:export-services:excel-exporter',
+                    f: 'search-form'
+                });
+            }
+            """
+        )
 
-    with page.expect_download(timeout=60000) as download_info:
-        page.locator("text=Excel").click()
+    response = response_info.value
+    content = response.body()
 
-    download = download_info.value
-    download.save_as(BOOKINGS_FILE)
+    with open(filepath, "wb") as f:
+        f.write(content)
 
 
 # ======================================================
@@ -126,24 +162,24 @@ def export_bookings(page):
 # ======================================================
 
 def run():
-    print("Starting BOOKINGS scraper")
+    print("Starting SERVICES export (PrimeFaces-safe)")
     print(f"Output directory: {OUTPUT_DIR}")
-    print(f"Departure dates: {DATE_FROM} → {DATE_TO}")
+    print(f"Dates: {DATE_FROM} → {DATE_TO}")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        context = browser.new_context(accept_downloads=True)
+        context = browser.new_context()
         page = context.new_page()
 
         login(page)
         apply_filters(page)
-        export_bookings(page)
+        export_services_excel(page, SERVICES_FILE)
 
         context.close()
         browser.close()
 
     print("DONE")
-    print(f"- {BOOKINGS_FILE}")
+    print(f"- {SERVICES_FILE}")
 
 
 if __name__ == "__main__":
