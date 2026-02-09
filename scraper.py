@@ -2,17 +2,17 @@ import os
 from datetime import datetime, timedelta
 from playwright.sync_api import sync_playwright
 
-# =========================
-# PATHS (PORTABLE)
-# =========================
+# ======================================================
+# PATHS (PORTABLE / CI-SAFE)
+# ======================================================
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# =========================
+# ======================================================
 # CONFIG
-# =========================
+# ======================================================
 
 LOGIN_URL = (
     "https://mitika.travel/login.xhtml?"
@@ -35,9 +35,9 @@ STAMP = TODAY.strftime("%Y_%m_%d")
 BOOKINGS_FILE = os.path.join(OUTPUT_DIR, f"BOOKINGS_{STAMP}.xlsx")
 SERVICES_FILE = os.path.join(OUTPUT_DIR, f"SERVICES_{STAMP}.xlsx")
 
-# =========================
+# ======================================================
 # STEPS
-# =========================
+# ======================================================
 
 def login(page):
     page.goto(LOGIN_URL, timeout=60000)
@@ -46,7 +46,6 @@ def login(page):
     page.fill("#login-form\\:login-content\\:login\\:j_password", PASSWORD)
     page.click("button:has-text('Siguiente')")
 
-    # Accept cookies if shown
     if page.locator("button:has-text('Aceptar todo')").count():
         page.click("button:has-text('Aceptar todo')")
 
@@ -57,7 +56,7 @@ def apply_filters(page):
     page.goto(BOOKINGS_URL, timeout=60000)
     page.wait_for_load_state("networkidle")
 
-    # Open filters panel
+    # Open advanced filters
     page.evaluate(
         """
         () => {
@@ -67,7 +66,7 @@ def apply_filters(page):
         """
     )
 
-    page.wait_for_selector("#search-form", timeout=30000)
+    page.wait_for_selector("#search-form", timeout=60000)
 
     # Clear creation dates
     page.evaluate(
@@ -79,7 +78,7 @@ def apply_filters(page):
         """
     )
 
-    # Set departure dates (CORRECT Playwright Python pattern)
+    # Set departure dates (Playwright Python correct pattern)
     page.evaluate(
         """({ fromDate, toDate }) => {
             const f = document.getElementById(
@@ -92,7 +91,6 @@ def apply_filters(page):
             if (f && t) {
                 f.value = fromDate;
                 t.value = toDate;
-
                 f.dispatchEvent(new Event("change", { bubbles: true }));
                 t.dispatchEvent(new Event("change", { bubbles: true }));
             }
@@ -103,10 +101,25 @@ def apply_filters(page):
         },
     )
 
-    # Buscar = Alojamiento
-    page.select_option(
+    # Wait for search type select (CI-safe)
+    page.wait_for_selector(
         "select[name='search-form:booking-filters:searchType']",
-        "HOTELS",
+        timeout=60000,
+    )
+
+    # Set search type = HOTELS via JS (robust in headless)
+    page.evaluate(
+        """
+        () => {
+            const select = document.querySelector(
+                "select[name='search-form:booking-filters:searchType']"
+            );
+            if (select) {
+                select.value = "HOTELS";
+                select.dispatchEvent(new Event("change", { bubbles: true }));
+            }
+        }
+        """
     )
 
     # Estado = Reservado
@@ -136,24 +149,25 @@ def apply_filters(page):
 
 
 def export_excel(page, filepath):
-    with page.expect_download() as d:
+    with page.expect_download() as download_info:
         page.evaluate(
             """
             () => {
-                document
-                  .querySelector("button:has(.icon-download), button:has-text('Exportar')")
-                  ?.click();
+                const btn =
+                    document.querySelector("button:has(.icon-download)") ||
+                    document.querySelector("button:has-text('Exportar')");
+                if (btn) btn.click();
             }
             """
         )
         page.click("text=Excel")
 
-    d.value.save_as(filepath)
+    download_info.value.save_as(filepath)
 
 
-# =========================
+# ======================================================
 # MAIN
-# =========================
+# ======================================================
 
 def run():
     print("Starting scraper...")
