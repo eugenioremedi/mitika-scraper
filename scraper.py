@@ -37,27 +37,33 @@ STAMP = TODAY.strftime("%Y_%m_%d")
 EXCEL_FILE = os.path.join(OUTPUT_DIR, f"BOOKINGS_{STAMP}.xlsx")
 
 # ======================================================
-# HELPERS
+# BASE64 DETECTION (ROBUST)
 # ======================================================
 
-BASE64_REGEX = re.compile(
-    r"data:application/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet;base64,([A-Za-z0-9+/=]+)"
+BASE64_PATTERN = re.compile(
+    r"data:application/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet;base64,([A-Za-z0-9+/=\s]+)",
+    re.DOTALL,
 )
 
-def extract_excel_from_response(text: str, output_path: str):
+def extract_excel_from_text(text: str, output_path: str) -> bool:
     """
-    Busca el data:application/...;base64 dentro de la response,
-    lo decodifica y guarda el XLSX
+    Busca un data:application/...;base64 en cualquier texto,
+    lo decodifica y guarda el XLSX.
+    Devuelve True si lo encontró.
     """
-    match = BASE64_REGEX.search(text)
+    match = BASE64_PATTERN.search(text)
     if not match:
-        raise RuntimeError("No se encontró contenido base64 del Excel en la response")
+        return False
 
-    excel_b64 = match.group(1)
-    excel_bytes = base64.b64decode(excel_b64)
+    b64 = match.group(1)
+    b64 = re.sub(r"\s+", "", b64)  # limpia saltos de línea
+
+    data = base64.b64decode(b64)
 
     with open(output_path, "wb") as f:
-        f.write(excel_bytes)
+        f.write(data)
+
+    return True
 
 # ======================================================
 # STEPS
@@ -81,15 +87,11 @@ def apply_filters(page):
     page.wait_for_load_state("networkidle")
 
     # Abrir filtros
-    page.evaluate(
-        "() => document.querySelector('#clickOtherFilters')?.click()"
-    )
+    page.evaluate("() => document.querySelector('#clickOtherFilters')?.click()")
     page.wait_for_timeout(2000)
 
     # Limpiar fechas de creación
-    page.evaluate(
-        "() => document.querySelector('button.dev-clear-dates')?.click()"
-    )
+    page.evaluate("() => document.querySelector('button.dev-clear-dates')?.click()")
 
     # Fechas de salida
     page.evaluate(
@@ -125,48 +127,59 @@ def apply_filters(page):
     )
 
     # Aplicar filtros
-    page.evaluate(
-        "() => document.querySelector('button.applyFilters')?.click()"
-    )
+    page.evaluate("() => document.querySelector('button.applyFilters')?.click()")
     page.wait_for_load_state("networkidle")
 
 
 def export_excel_from_base64(page):
     """
-    Dispara el export PrimeFaces y captura la response AJAX
-    para extraer el Excel embebido en base64
+    Dispara el export PrimeFaces y escanea TODAS las responses
+    hasta encontrar el Excel embebido en base64.
     """
+    found = {"ok": False}
 
-    with page.expect_response(
-        lambda r: r.url.endswith("/admin/bookings/List.xhtml") and r.request.method == "POST",
-        timeout=120000,
-    ) as response_info:
-        page.evaluate(
-            """
-            () => {
-                PrimeFaces.monitorDataExporterDownload(
-                    travelc.admin.blockPage,
-                    travelc.admin.unblockPage
-                );
-                PrimeFaces.ab({
-                    s: 'search-form:services:export-services:excel-exporter',
-                    f: 'search-form'
-                });
-            }
-            """
-        )
+    def on_response(response):
+        if found["ok"]:
+            return
+        try:
+            text = response.text()
+        except Exception:
+            return
+        if extract_excel_from_text(text, EXCEL_FILE):
+            found["ok"] = True
 
-    response = response_info.value
-    body = response.text()
+    page.on("response", on_response)
 
-    extract_excel_from_response(body, EXCEL_FILE)
+    # Disparar EXACTAMENTE el onclick real
+    page.evaluate(
+        """
+        () => {
+            PrimeFaces.monitorDataExporterDownload(
+                travelc.admin.blockPage,
+                travelc.admin.unblockPage
+            );
+            PrimeFaces.ab({
+                s: 'search-form:services:export-services:excel-exporter',
+                f: 'search-form'
+            });
+        }
+        """
+    )
+
+    # Esperar hasta que aparezca el Excel (máx 2 min)
+    page.wait_for_timeout(120000)
+
+    page.off("response", on_response)
+
+    if not found["ok"]:
+        raise RuntimeError("No se pudo capturar el Excel desde ninguna response")
 
 # ======================================================
 # MAIN
 # ======================================================
 
 def run():
-    print("Starting Mitika Excel export (base64 mode)")
+    print("Starting Mitika Excel export (PrimeFaces base64 robust)")
     print(f"Output directory: {OUTPUT_DIR}")
     print(f"Dates: {DATE_FROM} → {DATE_TO}")
 
@@ -184,6 +197,7 @@ def run():
 
     print("DONE")
     print(f"- {EXCEL_FILE}")
+
 
 if __name__ == "__main__":
     run()
