@@ -18,7 +18,11 @@ LOGIN_URL = (
     "https://mitika.travel/login.xhtml?"
     "microsite=itravel&keepurl=true&url=%2Fhome%3FtripId%3D64"
 )
-BOOKINGS_URL = "https://mitika.travel/admin/bookings/List.xhtml"
+
+# 🔑 RESET DE ESTADO DE GRILLA (CLAVE PARA COLUMNAS COMPLETAS)
+BOOKINGS_URL = (
+    "https://mitika.travel/admin/bookings/List.xhtml?reset=true"
+)
 
 USERNAME = os.environ.get("MITIKA_USERNAME")
 PASSWORD = os.environ.get("MITIKA_PASSWORD")
@@ -55,58 +59,58 @@ def apply_filters(page):
     page.wait_for_load_state("networkidle")
 
     # Abrir filtros
-    page.evaluate("""() => document.querySelector("#clickOtherFilters")?.click()""")
+    page.evaluate(
+        "() => document.querySelector('#clickOtherFilters')?.click()"
+    )
     page.wait_for_timeout(2000)
 
     # Limpiar fechas de creación
-    page.evaluate("""() => document.querySelector("button.dev-clear-dates")?.click()""")
+    page.evaluate(
+        "() => document.querySelector('button.dev-clear-dates')?.click()"
+    )
 
-    # Fechas de salida
+    # Fechas de salida (Desde / Hasta)
     page.evaluate(
         """({ fromDate, toDate }) => {
             const f = document.getElementById(
-                "search-form:booking-filters:departureDateFrom_input"
+                'search-form:booking-filters:departureDateFrom_input'
             );
             const t = document.getElementById(
-                "search-form:booking-filters:departureDateTo_input"
+                'search-form:booking-filters:departureDateTo_input'
             );
             if (f && t) {
                 f.value = fromDate;
                 t.value = toDate;
-                f.dispatchEvent(new Event("change", { bubbles: true }));
-                t.dispatchEvent(new Event("change", { bubbles: true }));
+                f.dispatchEvent(new Event('change', { bubbles: true }));
+                t.dispatchEvent(new Event('change', { bubbles: true }));
             }
         }""",
         {"fromDate": DATE_FROM, "toDate": DATE_TO},
     )
 
-    # Estado = Reservado (solo ese)
+    # Estado = solo Reservado
     page.evaluate(
         """
         () => {
-            document.querySelectorAll(".ui-chkbox-box").forEach(e => {
-                if (!e.textContent.includes("Reservado") &&
-                    e.classList.contains("ui-state-active")) {
-                    e.click();
-                }
-            });
-            document.querySelectorAll(".ui-chkbox-box").forEach(e => {
-                if (e.textContent.includes("Reservado") &&
-                    !e.classList.contains("ui-state-active")) {
-                    e.click();
-                }
+            document.querySelectorAll('.ui-chkbox-box').forEach(e => {
+                const active = e.classList.contains('ui-state-active');
+                const isReservado = e.textContent.includes('Reservado');
+                if (active && !isReservado) e.click();
+                if (!active && isReservado) e.click();
             });
         }
         """
     )
 
     # Aplicar filtros
-    page.evaluate("""() => document.querySelector("button.applyFilters")?.click()""")
+    page.evaluate(
+        "() => document.querySelector('button.applyFilters')?.click()"
+    )
     page.wait_for_load_state("networkidle")
 
 
 def export_bookings(page):
-    # Click Exportar > Excel
+    # Exportar > Excel (BOOKINGS)
     page.locator("button:has-text('Exportar')").click()
     page.wait_for_timeout(1000)
 
@@ -122,9 +126,9 @@ def export_bookings(page):
 # ======================================================
 
 def run():
-    print("Starting BOOKINGS scraper...")
-    print(f"Output: {OUTPUT_DIR}")
-    print(f"Dates: {DATE_FROM} → {DATE_TO}")
+    print("Starting BOOKINGS scraper")
+    print(f"Output directory: {OUTPUT_DIR}")
+    print(f"Departure dates: {DATE_FROM} → {DATE_TO}")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
