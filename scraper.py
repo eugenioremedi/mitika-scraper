@@ -107,8 +107,12 @@ def apply_filters(page):
     page.wait_for_load_state("networkidle")
 
 
-def export_excel(page, exporter_id, filepath):
-    with page.expect_download(timeout=120000) as download_info:
+def export_excel_via_response(page, exporter_id, filepath):
+    with page.expect_response(
+        lambda r: "Content-Disposition" in r.headers
+        and "attachment" in r.headers["Content-Disposition"],
+        timeout=120000,
+    ) as response_info:
         page.evaluate(
             f"""
             () => {{
@@ -124,7 +128,11 @@ def export_excel(page, exporter_id, filepath):
             """
         )
 
-    download_info.value.save_as(filepath)
+    response = response_info.value
+    content = response.body()
+
+    with open(filepath, "wb") as f:
+        f.write(content)
 
 
 # ======================================================
@@ -137,14 +145,14 @@ def run():
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        context = browser.new_context(accept_downloads=True)
+        context = browser.new_context()
         page = context.new_page()
 
         login(page)
         apply_filters(page)
 
         # BOOKINGS
-        export_excel(
+        export_excel_via_response(
             page,
             "search-form:BOOKINGS:export-bookings:excel-exporter",
             BOOKINGS_FILE,
@@ -154,7 +162,7 @@ def run():
         page.goto(SERVICES_URL, timeout=60000)
         page.wait_for_load_state("networkidle")
 
-        export_excel(
+        export_excel_via_response(
             page,
             "search-form:SERVICES:export-services:excel-exporter",
             SERVICES_FILE,
