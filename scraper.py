@@ -46,18 +46,12 @@ BASE64_PATTERN = re.compile(
 )
 
 def extract_excel_from_text(text: str, output_path: str) -> bool:
-    """
-    Busca un data:application/...;base64 en cualquier texto,
-    lo decodifica y guarda el XLSX.
-    Devuelve True si lo encontró.
-    """
     match = BASE64_PATTERN.search(text)
     if not match:
         return False
 
     b64 = match.group(1)
-    b64 = re.sub(r"\s+", "", b64)  # limpia saltos de línea
-
+    b64 = re.sub(r"\s+", "", b64)
     data = base64.b64decode(b64)
 
     with open(output_path, "wb") as f:
@@ -86,14 +80,11 @@ def apply_filters(page):
     page.goto(BOOKINGS_URL, timeout=60000)
     page.wait_for_load_state("networkidle")
 
-    # Abrir filtros
     page.evaluate("() => document.querySelector('#clickOtherFilters')?.click()")
     page.wait_for_timeout(2000)
 
-    # Limpiar fechas de creación
     page.evaluate("() => document.querySelector('button.dev-clear-dates')?.click()")
 
-    # Fechas de salida
     page.evaluate(
         """({ fromDate, toDate }) => {
             const f = document.getElementById(
@@ -112,7 +103,6 @@ def apply_filters(page):
         {"fromDate": DATE_FROM, "toDate": DATE_TO},
     )
 
-    # Estado = solo Reservado
     page.evaluate(
         """
         () => {
@@ -126,16 +116,11 @@ def apply_filters(page):
         """
     )
 
-    # Aplicar filtros
     page.evaluate("() => document.querySelector('button.applyFilters')?.click()")
     page.wait_for_load_state("networkidle")
 
 
 def export_excel_from_base64(page):
-    """
-    Dispara el export PrimeFaces y escanea TODAS las responses
-    hasta encontrar el Excel embebido en base64.
-    """
     found = {"ok": False}
 
     def on_response(response):
@@ -150,7 +135,6 @@ def export_excel_from_base64(page):
 
     page.on("response", on_response)
 
-    # Disparar EXACTAMENTE el onclick real
     page.evaluate(
         """
         () => {
@@ -166,10 +150,9 @@ def export_excel_from_base64(page):
         """
     )
 
-    # Esperar hasta que aparezca el Excel (máx 2 min)
     page.wait_for_timeout(120000)
 
-    page.off("response", on_response)
+    page.remove_listener("response", on_response)
 
     if not found["ok"]:
         raise RuntimeError("No se pudo capturar el Excel desde ninguna response")
