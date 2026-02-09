@@ -56,27 +56,11 @@ def apply_filters(page):
     page.goto(BOOKINGS_URL, timeout=60000)
     page.wait_for_load_state("networkidle")
 
-    # Abrir filtros avanzados
-    page.evaluate(
-        """
-        () => {
-            document.querySelector("#clickOtherFilters")?.click();
-        }
-        """
-    )
-
+    page.evaluate("""() => document.querySelector("#clickOtherFilters")?.click()""")
     page.wait_for_timeout(3000)
 
-    # Limpiar fechas de creación
-    page.evaluate(
-        """
-        () => {
-            document.querySelector("button.dev-clear-dates")?.click();
-        }
-        """
-    )
+    page.evaluate("""() => document.querySelector("button.dev-clear-dates")?.click()""")
 
-    # Setear fechas de salida
     page.evaluate(
         """({ fromDate, toDate }) => {
             const f = document.getElementById(
@@ -92,13 +76,9 @@ def apply_filters(page):
                 t.dispatchEvent(new Event("change", { bubbles: true }));
             }
         }""",
-        {
-            "fromDate": DATE_FROM,
-            "toDate": DATE_TO,
-        },
+        {"fromDate": DATE_FROM, "toDate": DATE_TO},
     )
 
-    # 🔑 SETEAR TIPO = HOTELS (SIN ESPERAR VISIBILIDAD)
     page.evaluate(
         """
         () => {
@@ -113,42 +93,32 @@ def apply_filters(page):
         """
     )
 
-    # Estado = Reservado
     page.evaluate(
         """
         () => {
             document.querySelectorAll(".ui-chkbox-box").forEach(e => {
-                if (e.textContent.includes("Reservado")) {
-                    e.click();
-                }
+                if (e.textContent.includes("Reservado")) e.click();
             });
         }
         """
     )
 
-    # Aplicar filtros
-    page.evaluate(
-        """
-        () => {
-            document.querySelector("button.applyFilters")?.click();
-        }
-        """
-    )
-
+    page.evaluate("""() => document.querySelector("button.applyFilters")?.click()""")
     page.wait_for_load_state("networkidle")
 
 
-def export_excel(page, filepath):
+def export_excel(page, exporter_id, filepath):
     with page.expect_download() as download_info:
         page.evaluate(
-            """
-            () => {
-                document.querySelector("button:has(.icon-download)")?.click();
-            }
+            f"""
+            () => {{
+                const el = document.getElementById("{exporter_id}");
+                if (el) {{
+                    el.onclick();
+                }}
+            }}
             """
         )
-        page.click("text=Excel")
-
     download_info.value.save_as(filepath)
 
 
@@ -168,11 +138,22 @@ def run():
         login(page)
         apply_filters(page)
 
-        export_excel(page, BOOKINGS_FILE)
+        # BOOKINGS
+        export_excel(
+            page,
+            "search-form:BOOKINGS:export-bookings:excel-exporter",
+            BOOKINGS_FILE,
+        )
 
+        # SERVICES
         page.goto(SERVICES_URL, timeout=60000)
         page.wait_for_load_state("networkidle")
-        export_excel(page, SERVICES_FILE)
+
+        export_excel(
+            page,
+            "search-form:SERVICES:export-services:excel-exporter",
+            SERVICES_FILE,
+        )
 
         context.close()
         browser.close()
