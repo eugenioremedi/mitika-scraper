@@ -108,17 +108,22 @@ def apply_filters(page):
 
 
 def export_excel(page, exporter_id, filepath):
-    with page.expect_download() as download_info:
+    with page.expect_download(timeout=120000) as download_info:
         page.evaluate(
             f"""
             () => {{
-                const el = document.getElementById("{exporter_id}");
-                if (el) {{
-                    el.onclick();
-                }}
+                PrimeFaces.monitorDataExporterDownload(
+                    travelc.admin.blockPage,
+                    travelc.admin.unblockPage
+                );
+                PrimeFaces.ab({{
+                    s: "{exporter_id}",
+                    f: "search-form"
+                }});
             }}
             """
         )
+
     download_info.value.save_as(filepath)
 
 
