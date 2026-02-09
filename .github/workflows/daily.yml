@@ -30,3 +30,11 @@ jobs:
         env:
           MITIKA_USERNAME: ${{ secrets.MITIKA_USERNAME }}
           MITIKA_PASSWORD: ${{ secrets.MITIKA_PASSWORD }}
+
+      - name: Upload output (screenshots + files)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scraper-output
+          path: output/
+          retention-days: 7
