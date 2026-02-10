@@ -47,27 +47,30 @@ def set_date_input(page, input_id, value):
         """({ inputId, val }) => {
             const input = document.getElementById(inputId);
             if (!input) return;
-            // Use native setter to bypass React/PrimeFaces wrappers
             const nativeSetter = Object.getOwnPropertyDescriptor(
                 window.HTMLInputElement.prototype, 'value'
             ).set;
             nativeSetter.call(input, val);
             input.dispatchEvent(new Event('input', { bubbles: true }));
             input.dispatchEvent(new Event('change', { bubbles: true }));
-            input.dispatchEvent(new Event('focus', { bubbles: true }));
-            input.dispatchEvent(new Event('blur', { bubbles: true }));
         }""",
         {"inputId": input_id, "val": value},
     )
 
 
-def scroll_filter_sidebar(page):
-    """Scroll the filter sidebar to the bottom."""
+def close_any_popups(page):
+    """Close any open calendar popups or overlays."""
     page.evaluate("""() => {
-        const scroller = document.querySelector('.c-hidden-aside__scroller') ||
-                         document.getElementById('c-hidden-aside--booking-filters') ||
-                         document.querySelector('#search-form\\\\:booking-filters\\\\:search-form');
-        if (scroller) scroller.scrollTop = scroller.scrollHeight;
+        // Hide all PrimeFaces datepicker panels
+        document.querySelectorAll(
+            '.p-datepicker-panel, .ui-datepicker, .p-datepicker, ' +
+            '.p-connected-overlay, .p-component-overlay'
+        ).forEach(el => {
+            el.style.display = 'none';
+        });
+        // Click the sidebar header area to dismiss popups
+        const header = document.querySelector('.c-sticky-header');
+        if (header) header.click();
     }""")
 
 
@@ -131,7 +134,7 @@ def apply_filters(page):
     })""")
     print(f"  Creation dates: from='{cleared['from']}', to='{cleared['to']}'")
 
-    # ── Step 3: Expand "Fecha de salida" and set BOTH departure dates ──
+    # ── Step 3: Expand "Fecha de salida" and set departure dates ──
     print("  Expanding 'Fecha de salida'...")
     page.locator("text=Fecha de salida").first.click()
     page.wait_for_timeout(1500)
@@ -139,23 +142,13 @@ def apply_filters(page):
     print(f"  Setting departure Desde: {DATE_FROM}")
     set_date_input(page, "search-form:booking-filters:departureDateFrom_input", DATE_FROM)
     page.wait_for_timeout(500)
-
-    # Dismiss any calendar popup that might have appeared by clicking elsewhere
-    page.evaluate("""() => {
-        const overlay = document.querySelector('.p-datepicker-panel, .ui-datepicker');
-        if (overlay) overlay.style.display = 'none';
-    }""")
+    close_any_popups(page)
     page.wait_for_timeout(300)
 
     print(f"  Setting departure Hasta: {DATE_TO}")
     set_date_input(page, "search-form:booking-filters:departureDateTo_input", DATE_TO)
     page.wait_for_timeout(500)
-
-    # Dismiss calendar again
-    page.evaluate("""() => {
-        const overlay = document.querySelector('.p-datepicker-panel, .ui-datepicker');
-        if (overlay) overlay.style.display = 'none';
-    }""")
+    close_any_popups(page)
     page.wait_for_timeout(300)
 
     # Verify both dates
@@ -166,72 +159,135 @@ def apply_filters(page):
     print(f"  Departure dates: from='{dep_dates['from']}', to='{dep_dates['to']}'")
     screenshot(page, "04_dates_set")
 
-    # ── Step 4: Scroll down to Estado section ──
-    print("  Scrolling to Estado...")
-    scroll_filter_sidebar(page)
+    # ── Step 4: Close any remaining popups and scroll to bottom of sidebar ──
+    print("  Closing popups and scrolling to Estado...")
+    close_any_popups(page)
+    page.wait_for_timeout(500)
+
+    # Press Escape to dismiss any open calendar
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(300)
+
+    # Scroll the filter sidebar to the very bottom
+    page.evaluate("""() => {
+        const containers = [
+            document.querySelector('#search-form\\\\:booking-filters\\\\:search-form'),
+            document.querySelector('.c-hidden-aside__scroller'),
+            document.getElementById('c-hidden-aside--booking-filters'),
+        ];
+        for (const c of containers) {
+            if (c) c.scrollTop = c.scrollHeight;
+        }
+    }""")
     page.wait_for_timeout(1000)
 
+    screenshot(page, "05_scrolled_to_bottom")
+
     # ── Step 5: Expand "Estado" accordion ──
-    # The Estado section is a collapsible accordion — we need to click the header
-    # From screenshot 5, it shows as "Estado ▼" (collapsed)
     print("  Expanding 'Estado' accordion...")
 
-    # Try clicking the Estado header text within the filter sidebar
-    estado_clicked = page.evaluate("""() => {
+    # Use scrollIntoView on the dropdownStatus container to make sure we can see it
+    page.evaluate("""() => {
+        const dd = document.getElementById('dropdownStatus');
+        if (dd) dd.scrollIntoView({ behavior: 'instant', block: 'center' });
+    }""")
+    page.wait_for_timeout(500)
+
+    # Click the Estado header — it's a sibling/parent of dropdownStatus
+    estado_result = page.evaluate("""() => {
+        // Strategy 1: Find the "Estado" text element and click it
         const sidebar = document.getElementById('c-hidden-aside--booking-filters');
         if (!sidebar) return 'sidebar_not_found';
 
-        // Look for clickable elements containing exactly "Estado"
-        const clickables = sidebar.querySelectorAll(
-            'h2, h3, h4, summary, [role="button"], .u-cursor--pointer, ' +
-            'div[class*="collaps"], div[class*="accordion"], a, button, span'
+        // The accordion headers are typically div or span elements
+        const walker = document.createTreeWalker(
+            sidebar, NodeFilter.SHOW_TEXT, null, false
         );
-        for (const el of clickables) {
-            // Match elements where the direct text is "Estado" (not children containing other text)
-            const directText = Array.from(el.childNodes)
-                .filter(n => n.nodeType === 3)
-                .map(n => n.textContent.trim())
-                .join('');
-            const fullText = el.textContent.trim();
-
-            if (directText === 'Estado' || fullText === 'Estado') {
-                el.click();
-                return 'clicked: ' + el.tagName + '.' + el.className.substring(0, 40);
+        while (walker.nextNode()) {
+            if (walker.currentNode.textContent.trim() === 'Estado') {
+                const parent = walker.currentNode.parentElement;
+                if (parent) {
+                    parent.click();
+                    return 'clicked_text_parent: ' + parent.tagName + ' ' + parent.className.substring(0, 40);
+                }
             }
         }
+
+        // Strategy 2: Find the dropdown container's preceding sibling/header
+        const dd = document.getElementById('dropdownStatus');
+        if (dd) {
+            // The accordion header is usually the previous sibling or parent's first child
+            let header = dd.previousElementSibling;
+            if (header) {
+                header.click();
+                return 'clicked_prev_sibling: ' + header.tagName;
+            }
+            // Try parent
+            const parent = dd.parentElement;
+            if (parent) {
+                const firstChild = parent.querySelector('div, span, h3, summary');
+                if (firstChild && firstChild !== dd) {
+                    firstChild.click();
+                    return 'clicked_parent_first_child: ' + firstChild.tagName;
+                }
+            }
+        }
+
         return 'not_found';
     }""")
-    print(f"  Estado expand: {estado_clicked}")
+    print(f"  Estado expand: {estado_result}")
     page.wait_for_timeout(1500)
 
-    # If that didn't work, try the Playwright locator approach
-    if "not_found" in str(estado_clicked):
-        print("  Retrying with locator...")
-        try:
-            # The "Estado" text in the sidebar
-            estado_loc = page.locator("#c-hidden-aside--booking-filters >> text=Estado").first
-            estado_loc.click()
-            page.wait_for_timeout(1500)
-            print("  Locator click succeeded")
-        except Exception as e:
-            print(f"  ⚠️ Locator failed: {e}")
+    # Check if dropdownStatus is now visible
+    dd_visible = page.evaluate("""() => {
+        const dd = document.getElementById('dropdownStatus');
+        if (!dd) return { exists: false };
+        return {
+            exists: true,
+            display: window.getComputedStyle(dd).display,
+            visibility: window.getComputedStyle(dd).visibility,
+            height: dd.offsetHeight,
+            childCount: dd.children.length
+        };
+    }""")
+    print(f"  dropdownStatus state: {dd_visible}")
 
-    # Scroll again after expanding to make sure checkboxes are visible
-    scroll_filter_sidebar(page)
-    page.wait_for_timeout(500)
+    # If still hidden, force it visible
+    if dd_visible.get('display') == 'none' or dd_visible.get('height', 0) == 0:
+        print("  ⚠️ Estado still hidden, forcing visible...")
+        page.evaluate("""() => {
+            const dd = document.getElementById('dropdownStatus');
+            if (!dd) return;
+            dd.style.display = 'block';
+            dd.style.visibility = 'visible';
+            dd.style.height = 'auto';
+            dd.style.overflow = 'visible';
+            dd.style.maxHeight = 'none';
+            // Also make parent visible
+            let parent = dd.parentElement;
+            while (parent && parent.id !== 'c-hidden-aside--booking-filters') {
+                parent.style.display = 'block';
+                parent.style.visibility = 'visible';
+                parent.style.height = 'auto';
+                parent.style.overflow = 'visible';
+                parent.style.maxHeight = 'none';
+                parent = parent.parentElement;
+            }
+        }""")
+        page.wait_for_timeout(500)
 
-    screenshot(page, "05_estado_expanded")
+    screenshot(page, "06_estado_state")
 
-    # ── Step 6: Check if the status checkboxes are now visible ──
-    checkbox_info = page.evaluate("""() => {
+    # ── Step 6: Uncheck all statuses, keep only "Reservado" ──
+    print("  Setting status = Reservado only...")
+
+    # First, list what we see
+    checkbox_state = page.evaluate("""() => {
         const container = document.getElementById('dropdownStatus');
-        if (!container) return { error: 'dropdownStatus not found' };
-
-        const visible = container.offsetParent !== null;
-        const height = container.offsetHeight;
-        const checkboxes = container.querySelectorAll('.ui-chkbox');
+        if (!container) return { error: 'no container' };
 
         const items = [];
+        const checkboxes = container.querySelectorAll('.ui-chkbox');
         for (const chk of checkboxes) {
             const box = chk.querySelector('.ui-chkbox-box');
             const icon = chk.querySelector('.ui-chkbox-icon');
@@ -242,34 +298,16 @@ def apply_filters(page):
                               icon?.classList.contains('ui-icon-check');
             items.push({ text, checked: isChecked });
         }
-
-        return { visible, height, count: checkboxes.length, items };
+        return { count: checkboxes.length, items };
     }""")
-    print(f"  Status container visible: {checkbox_info.get('visible')}, "
-          f"height: {checkbox_info.get('height')}, "
-          f"checkboxes: {checkbox_info.get('count')}")
-    for item in checkbox_info.get('items', []):
+    print(f"  Checkboxes found: {checkbox_state.get('count', 0)}")
+    for item in checkbox_state.get('items', []):
         print(f"    [{('✓' if item['checked'] else ' ')}] {item['text']}")
 
-    # If container not visible or no checkboxes found, try expanding differently
-    if checkbox_info.get('count', 0) == 0 or not checkbox_info.get('visible', False):
-        print("  ⚠️ Checkboxes not accessible, trying #dropdownStatus click...")
-        page.evaluate("""() => {
-            const dd = document.getElementById('dropdownStatus');
-            if (dd) {
-                dd.style.display = 'block';
-                dd.style.visibility = 'visible';
-                dd.style.height = 'auto';
-                dd.style.overflow = 'visible';
-            }
-        }""")
-        page.wait_for_timeout(500)
-
-    # ── Step 7: Uncheck all statuses, keep only "Reservado" ──
-    print("  Setting status = Reservado only...")
+    # Now toggle them
     status_result = page.evaluate("""() => {
         const container = document.getElementById('dropdownStatus');
-        if (!container) return ['dropdownStatus not found'];
+        if (!container) return ['container not found'];
 
         const results = [];
         const checkboxes = container.querySelectorAll('.ui-chkbox');
@@ -284,17 +322,15 @@ def apply_filters(page):
                               icon?.classList.contains('ui-icon-check');
 
             if (text === 'Reservado') {
-                if (!isChecked) {
-                    box?.click();
+                if (!isChecked && box) {
+                    box.click();
                     results.push('checked: Reservado');
                 } else {
                     results.push('already checked: Reservado');
                 }
-            } else if (text) {
-                if (isChecked) {
-                    box?.click();
-                    results.push('unchecked: ' + text);
-                }
+            } else if (text && isChecked && box) {
+                box.click();
+                results.push('unchecked: ' + text);
             }
         }
 
@@ -307,8 +343,7 @@ def apply_filters(page):
         const container = document.getElementById('dropdownStatus');
         if (!container) return [];
         const items = [];
-        const checkboxes = container.querySelectorAll('.ui-chkbox');
-        for (const chk of checkboxes) {
+        for (const chk of container.querySelectorAll('.ui-chkbox')) {
             const box = chk.querySelector('.ui-chkbox-box');
             const icon = chk.querySelector('.ui-chkbox-icon');
             const parent = chk.closest('div');
@@ -324,9 +359,9 @@ def apply_filters(page):
     for item in final_state:
         print(f"    [{('✓' if item['checked'] else ' ')}] {item['text']}")
 
-    screenshot(page, "06_status_set")
+    screenshot(page, "07_status_set")
 
-    # ── Step 8: Click "Aplicar" ──
+    # ── Step 7: Click "Aplicar" ──
     print("  Clicking Aplicar...")
     page.evaluate("""() => {
         const buttons = document.querySelectorAll('button, a');
@@ -340,7 +375,7 @@ def apply_filters(page):
 
     page.wait_for_load_state("networkidle")
     page.wait_for_timeout(5000)
-    screenshot(page, "07_after_apply")
+    screenshot(page, "08_after_apply")
 
     result = page.evaluate("""() => {
         const rows = document.querySelectorAll('table tbody tr');
@@ -358,14 +393,6 @@ def export_excel(page, exporter_id, filepath, label):
 
     exists = page.evaluate(f'() => !!document.getElementById("{exporter_id}")')
     print(f"  Exporter exists: {exists}")
-
-    if not exists:
-        snippet = page.evaluate("""() => {
-            const els = document.querySelectorAll('[id*="export"], [id*="excel"], [id*="Export"]');
-            return Array.from(els).map(e => e.id + ' (' + e.tagName + ')').join('\\n') || 'none';
-        }""")
-        print(f"  Export elements:\\n{snippet}")
-        screenshot(page, "export_missing")
 
     # Strategy 1: click + expect_download
     try:
