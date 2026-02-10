@@ -35,8 +35,22 @@ def upload_file(file_path, folder_id=None):
     try:
         about = service.about().get(fields="user(emailAddress)").execute()
         print(f"Authenticated as: {about['user']['emailAddress']}")
+        
+        # DEBUG: List all folders this account can see
+        print("\n=== DEBUG: Visible Folders ===")
+        results = service.files().list(
+            q="mimeType = 'application/vnd.google-apps.folder' and trashed = false",
+            pageSize=10, fields="nextPageToken, files(id, name)").execute()
+        items = results.get('files', [])
+        if not items:
+            print("No visible folders found. ensure you have shared the folder with the service account.")
+        else:
+            for item in items:
+                print(f"Found folder: {item['name']} ({item['id']})")
+        print("==============================\n")
+
     except Exception as e:
-        print(f"Could not determine Service Account email: {e}")
+        print(f"Could not determine Service Account details: {e}")
 
     if folder_id:
         # Sanitize folder_id in case user pasted the full URL
