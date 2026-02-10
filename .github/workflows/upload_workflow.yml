@@ -24,24 +24,22 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          pip install google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2
+          pip install google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2 playwright pandas openpyxl
+          playwright install chromium
 
       - name: Run Scraper Script
-        # Replace 'main.py' with your actual scraping script name
-        # We assume this script generates an Excel file, e.g., 'reservas.xlsx' or similar
-        run: python main.py
+        run: python scraper.py
         env:
           # Pass any environment variables your scraper needs
           MITIKA_USERNAME: ${{ secrets.MITIKA_USERNAME }}
           MITIKA_PASSWORD: ${{ secrets.MITIKA_PASSWORD }}
 
       - name: Upload to Google Drive
-        # Identify the generated file.
-        # Example: assuming the script generates a file matching 'reservas_*.csv' or similar.
-        # We'll pick the most recently created file if there are multiple, or a specific one.
+        # Identify the file to upload.
+        # The scraper generates files in 'output/BOOKINGS_yyyy_mm_dd.xlsx'
         run: |
-          # Find the generated file (adjust pattern as needed, e.g. *.xlsx)
-          FILE_TO_UPLOAD=$(ls -t *.csv | head -n 1) 
+          # Find the generated file in the output directory
+          FILE_TO_UPLOAD=$(find output -name "BOOKINGS_*.xlsx" | head -n 1)
 
           if [ -z "$FILE_TO_UPLOAD" ]; then
             echo "No file found to upload!"
@@ -51,8 +49,6 @@ jobs:
           echo "Found file: $FILE_TO_UPLOAD"
 
           # Run the upload script
-          # Replace 'YOUR_GOOGLE_DRIVE_FOLDER_ID' with the actual ID of the folder you want to upload to.
-          # You can also store this ID in secrets if you prefer.
           python upload_to_drive.py "$FILE_TO_UPLOAD" "${{ secrets.GDRIVE_FOLDER_ID }}"
         env:
           GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
