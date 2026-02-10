@@ -39,12 +39,23 @@ def upload_file(file_path, folder_id=None):
         print(f"Could not determine Service Account email: {e}")
 
     if folder_id:
+        # Sanitize folder_id in case user pasted the full URL
+        if "drive.google.com" in folder_id:
+            folder_id = folder_id.split("/")[-1]
+            if "?" in folder_id:
+                folder_id = folder_id.split("?")[0]
+        
+        # Print masked folder ID for debugging
+        masked_id = folder_id[:4] + "..." + folder_id[-4:] if len(folder_id) > 8 else "***"
+        print(f"Using Folder ID: {masked_id}")
+
         try:
             # Verify folder exists and is accessible
             service.files().get(fileId=folder_id).execute()
-            print(f"Target folder '{folder_id}' found and accessible.")
-        except Exception:
-            print(f"Error: Target folder with ID '{folder_id}' not found or not accessible.")
+            print(f"Target folder '{masked_id}' found and accessible.")
+        except Exception as e:
+            print(f"Error: Target folder with ID '{masked_id}' not found or not accessible.")
+            print(f"Details: {e}")
             print("Please ensure the folder exists and is shared with the Service Account email.")
             sys.exit(1)
 
