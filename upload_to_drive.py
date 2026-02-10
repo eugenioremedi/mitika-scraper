@@ -31,6 +31,13 @@ def upload_file(file_path, folder_id=None):
     creds = authenticate()
     service = build('drive', 'v3', credentials=creds)
 
+    # Print the service account email for debugging
+    try:
+        about = service.about().get(fields="user(emailAddress)").execute()
+        print(f"Authenticated as: {about['user']['emailAddress']}")
+    except Exception as e:
+        print(f"Could not determine Service Account email: {e}")
+
     if folder_id:
         try:
             # Verify folder exists and is accessible
