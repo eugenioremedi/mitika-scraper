@@ -145,7 +145,8 @@ def apply_filters(page):
     dep_to_id = "search-form:booking-filters:departureDateTo_input"
 
     # Set Desde
-    dep_from = page.locator(f"#{dep_from_id.replace(':', '\\\\:')}")
+    dep_from_css = "#" + dep_from_id.replace(":", "\\:")
+    dep_from = page.locator(dep_from_css)
     dep_from.click()
     page.wait_for_timeout(300)
     dep_from.fill("")
@@ -154,7 +155,8 @@ def apply_filters(page):
     page.wait_for_timeout(500)
 
     # Set Hasta
-    dep_to = page.locator(f"#{dep_to_id.replace(':', '\\\\:')}")
+    dep_to_css = "#" + dep_to_id.replace(":", "\\:")
+    dep_to = page.locator(dep_to_css)
     dep_to.click()
     page.wait_for_timeout(300)
     dep_to.fill("")
