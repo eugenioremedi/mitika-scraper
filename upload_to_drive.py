@@ -40,8 +40,11 @@ def upload_file(file_path, folder_id=None):
 
     if folder_id:
         # Sanitize folder_id in case user pasted the full URL
+        folder_id = folder_id.strip()
         if "drive.google.com" in folder_id:
-            folder_id = folder_id.split("/")[-1]
+            parts = folder_id.split("/")
+            # Get the last non-empty part
+            folder_id = [p for p in parts if p.strip()][-1]
             if "?" in folder_id:
                 folder_id = folder_id.split("?")[0]
         
