@@ -33,6 +33,7 @@ DATE_TO = (TODAY + timedelta(days=360)).strftime("%d/%m/%Y")
 STAMP = TODAY.strftime("%Y_%m_%d")
 
 BOOKINGS_FILE = os.path.join(OUTPUT_DIR, f"BOOKINGS_{STAMP}.xlsx")
+PARAMS_FILE = os.path.join(OUTPUT_DIR, f"FILTER_PARAMS_{STAMP}.txt")
 
 
 def screenshot(page, name):
@@ -41,37 +42,40 @@ def screenshot(page, name):
     print(f"  📸 {name}")
 
 
-def set_date_input(page, input_id, value):
-    """Set a PrimeFaces date input value reliably."""
-    page.evaluate(
-        """({ inputId, val }) => {
-            const input = document.getElementById(inputId);
-            if (!input) return;
-            const nativeSetter = Object.getOwnPropertyDescriptor(
-                window.HTMLInputElement.prototype, 'value'
-            ).set;
-            nativeSetter.call(input, val);
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            input.dispatchEvent(new Event('change', { bubbles: true }));
-        }""",
-        {"inputId": input_id, "val": value},
-    )
-
-
-def close_any_popups(page):
-    """Close any open calendar popups or overlays."""
-    page.evaluate("""() => {
-        // Hide all PrimeFaces datepicker panels
-        document.querySelectorAll(
-            '.p-datepicker-panel, .ui-datepicker, .p-datepicker, ' +
-            '.p-connected-overlay, .p-component-overlay'
-        ).forEach(el => {
-            el.style.display = 'none';
-        });
-        // Click the sidebar header area to dismiss popups
-        const header = document.querySelector('.c-sticky-header');
-        if (header) header.click();
-    }""")
+def save_filter_params(actual_dates, actual_statuses):
+    """Save the filter parameters used to a text file."""
+    lines = [
+        f"Fecha de ejecución: {TODAY.strftime('%d/%m/%Y %H:%M')}",
+        f"",
+        f"=== PARÁMETROS DE FILTRO ===",
+        f"",
+        f"Fecha de creación: Sin filtro (eliminadas)",
+        f"",
+        f"Fecha de salida:",
+        f"  Desde: {DATE_FROM}",
+        f"  Hasta: {DATE_TO}",
+        f"",
+        f"Buscar: Bookings",
+        f"",
+        f"Estado: Solo Reservado",
+        f"  (Desmarcados: Error de reserva, Pendiente, No reservado,",
+        f"   Parcialmente reservado, Cancelado, Error en precio,",
+        f"   Pendiente actualizar)",
+        f"",
+        f"=== VALORES REALES APLICADOS ===",
+        f"",
+        f"Fecha de creación (Desde): {actual_dates.get('creation_from', 'N/A')}",
+        f"Fecha de creación (Hasta): {actual_dates.get('creation_to', 'N/A')}",
+        f"Fecha de salida (Desde):   {actual_dates.get('departure_from', 'N/A')}",
+        f"Fecha de salida (Hasta):   {actual_dates.get('departure_to', 'N/A')}",
+        f"",
+        f"Estados marcados: {', '.join(actual_statuses) if actual_statuses else 'N/A'}",
+        f"",
+        f"Archivo exportado: BOOKINGS_{STAMP}.xlsx",
+    ]
+    with open(PARAMS_FILE, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    print(f"  📝 Filter params saved: {PARAMS_FILE}")
 
 
 # ======================================================
@@ -115,7 +119,7 @@ def apply_filters(page):
     page.wait_for_timeout(2000)
     screenshot(page, "03_filters_opened")
 
-    # ── Step 2: Clear creation dates ──
+    # ── Step 2: Click "Eliminar fechas" on creation dates ──
     print("  Clearing creation dates...")
     page.evaluate("""() => {
         const all = document.querySelectorAll('button, a');
@@ -128,30 +132,37 @@ def apply_filters(page):
     }""")
     page.wait_for_timeout(1000)
 
-    cleared = page.evaluate("""() => ({
-        from: document.getElementById('search-form:booking-filters:creationDateFrom_input')?.value || '',
-        to: document.getElementById('search-form:booking-filters:creationDateTo_input')?.value || ''
-    })""")
-    print(f"  Creation dates: from='{cleared['from']}', to='{cleared['to']}'")
-
-    # ── Step 3: Expand "Fecha de salida" and set departure dates ──
+    # ── Step 3: Expand "Fecha de salida" accordion ──
     print("  Expanding 'Fecha de salida'...")
     page.locator("text=Fecha de salida").first.click()
     page.wait_for_timeout(1500)
 
-    print(f"  Setting departure Desde: {DATE_FROM}")
-    set_date_input(page, "search-form:booking-filters:departureDateFrom_input", DATE_FROM)
-    page.wait_for_timeout(500)
-    close_any_popups(page)
-    page.wait_for_timeout(300)
+    # ── Step 4: Set departure dates ──
+    print(f"  Setting departure dates: {DATE_FROM} → {DATE_TO}")
 
-    print(f"  Setting departure Hasta: {DATE_TO}")
-    set_date_input(page, "search-form:booking-filters:departureDateTo_input", DATE_TO)
-    page.wait_for_timeout(500)
-    close_any_popups(page)
-    page.wait_for_timeout(300)
+    # Use triple-click + type to clear & fill the inputs reliably
+    dep_from_id = "search-form:booking-filters:departureDateFrom_input"
+    dep_to_id = "search-form:booking-filters:departureDateTo_input"
 
-    # Verify both dates
+    # Set Desde
+    dep_from = page.locator(f"#{dep_from_id.replace(':', '\\\\:')}")
+    dep_from.click()
+    page.wait_for_timeout(300)
+    dep_from.fill("")
+    dep_from.type(DATE_FROM, delay=50)
+    page.keyboard.press("Escape")  # Close calendar popup
+    page.wait_for_timeout(500)
+
+    # Set Hasta
+    dep_to = page.locator(f"#{dep_to_id.replace(':', '\\\\:')}")
+    dep_to.click()
+    page.wait_for_timeout(300)
+    dep_to.fill("")
+    dep_to.type(DATE_TO, delay=50)
+    page.keyboard.press("Escape")  # Close calendar popup
+    page.wait_for_timeout(500)
+
+    # Verify
     dep_dates = page.evaluate("""() => ({
         from: document.getElementById('search-form:booking-filters:departureDateFrom_input')?.value || '',
         to: document.getElementById('search-form:booking-filters:departureDateTo_input')?.value || ''
@@ -159,139 +170,52 @@ def apply_filters(page):
     print(f"  Departure dates: from='{dep_dates['from']}', to='{dep_dates['to']}'")
     screenshot(page, "04_dates_set")
 
-    # ── Step 4: Close any remaining popups and scroll to bottom of sidebar ──
-    print("  Closing popups and scrolling to Estado...")
-    close_any_popups(page)
-    page.wait_for_timeout(500)
-
-    # Press Escape to dismiss any open calendar
-    page.keyboard.press("Escape")
-    page.wait_for_timeout(300)
+    # ── Step 5: Scroll sidebar to bottom and expand Estado ──
+    print("  Scrolling to Estado section...")
 
     # Scroll the filter sidebar to the very bottom
     page.evaluate("""() => {
-        const containers = [
-            document.querySelector('#search-form\\\\:booking-filters\\\\:search-form'),
-            document.querySelector('.c-hidden-aside__scroller'),
-            document.getElementById('c-hidden-aside--booking-filters'),
-        ];
-        for (const c of containers) {
-            if (c) c.scrollTop = c.scrollHeight;
-        }
+        const sidebar = document.getElementById('c-hidden-aside--booking-filters');
+        if (sidebar) sidebar.scrollTop = sidebar.scrollHeight;
     }""")
     page.wait_for_timeout(1000)
 
-    screenshot(page, "05_scrolled_to_bottom")
-
-    # ── Step 5: Expand "Estado" accordion ──
+    # Now click "Estado" to expand it
     print("  Expanding 'Estado' accordion...")
-
-    # Use scrollIntoView on the dropdownStatus container to make sure we can see it
     page.evaluate("""() => {
-        const dd = document.getElementById('dropdownStatus');
-        if (dd) dd.scrollIntoView({ behavior: 'instant', block: 'center' });
-    }""")
-    page.wait_for_timeout(500)
-
-    # Click the Estado header — it's a sibling/parent of dropdownStatus
-    estado_result = page.evaluate("""() => {
-        // Strategy 1: Find the "Estado" text element and click it
         const sidebar = document.getElementById('c-hidden-aside--booking-filters');
-        if (!sidebar) return 'sidebar_not_found';
-
-        // The accordion headers are typically div or span elements
-        const walker = document.createTreeWalker(
-            sidebar, NodeFilter.SHOW_TEXT, null, false
-        );
+        if (!sidebar) return;
+        const walker = document.createTreeWalker(sidebar, NodeFilter.SHOW_TEXT, null, false);
         while (walker.nextNode()) {
             if (walker.currentNode.textContent.trim() === 'Estado') {
                 const parent = walker.currentNode.parentElement;
-                if (parent) {
-                    parent.click();
-                    return 'clicked_text_parent: ' + parent.tagName + ' ' + parent.className.substring(0, 40);
-                }
+                if (parent) parent.click();
+                return;
             }
         }
-
-        // Strategy 2: Find the dropdown container's preceding sibling/header
-        const dd = document.getElementById('dropdownStatus');
-        if (dd) {
-            // The accordion header is usually the previous sibling or parent's first child
-            let header = dd.previousElementSibling;
-            if (header) {
-                header.click();
-                return 'clicked_prev_sibling: ' + header.tagName;
-            }
-            // Try parent
-            const parent = dd.parentElement;
-            if (parent) {
-                const firstChild = parent.querySelector('div, span, h3, summary');
-                if (firstChild && firstChild !== dd) {
-                    firstChild.click();
-                    return 'clicked_parent_first_child: ' + firstChild.tagName;
-                }
-            }
-        }
-
-        return 'not_found';
     }""")
-    print(f"  Estado expand: {estado_result}")
     page.wait_for_timeout(1500)
 
-    # Check if dropdownStatus is now visible
-    dd_visible = page.evaluate("""() => {
-        const dd = document.getElementById('dropdownStatus');
-        if (!dd) return { exists: false };
-        return {
-            exists: true,
-            display: window.getComputedStyle(dd).display,
-            visibility: window.getComputedStyle(dd).visibility,
-            height: dd.offsetHeight,
-            childCount: dd.children.length
-        };
+    # Scroll again to make sure checkboxes are visible
+    page.evaluate("""() => {
+        const sidebar = document.getElementById('c-hidden-aside--booking-filters');
+        if (sidebar) sidebar.scrollTop = sidebar.scrollHeight;
     }""")
-    print(f"  dropdownStatus state: {dd_visible}")
+    page.wait_for_timeout(500)
 
-    # If still hidden, force it visible
-    if dd_visible.get('display') == 'none' or dd_visible.get('height', 0) == 0:
-        print("  ⚠️ Estado still hidden, forcing visible...")
-        page.evaluate("""() => {
-            const dd = document.getElementById('dropdownStatus');
-            if (!dd) return;
-            dd.style.display = 'block';
-            dd.style.visibility = 'visible';
-            dd.style.height = 'auto';
-            dd.style.overflow = 'visible';
-            dd.style.maxHeight = 'none';
-            // Also make parent visible
-            let parent = dd.parentElement;
-            while (parent && parent.id !== 'c-hidden-aside--booking-filters') {
-                parent.style.display = 'block';
-                parent.style.visibility = 'visible';
-                parent.style.height = 'auto';
-                parent.style.overflow = 'visible';
-                parent.style.maxHeight = 'none';
-                parent = parent.parentElement;
-            }
-        }""")
-        page.wait_for_timeout(500)
+    screenshot(page, "05_estado_expanded")
 
-    screenshot(page, "06_estado_state")
-
-    # ── Step 6: Uncheck all statuses, keep only "Reservado" ──
-    print("  Setting status = Reservado only...")
-
-    # First, list what we see
+    # ── Step 6: Check current checkbox state ──
     checkbox_state = page.evaluate("""() => {
         const container = document.getElementById('dropdownStatus');
-        if (!container) return { error: 'no container' };
+        if (!container) return { error: 'no container', html: '' };
 
         const items = [];
         const checkboxes = container.querySelectorAll('.ui-chkbox');
         for (const chk of checkboxes) {
             const box = chk.querySelector('.ui-chkbox-box');
             const icon = chk.querySelector('.ui-chkbox-icon');
-            const parent = chk.closest('div');
+            const parent = chk.closest('div, li, tr');
             const label = parent?.querySelector('label');
             const text = label?.textContent.trim() || '';
             const isChecked = box?.classList.contains('ui-state-active') ||
@@ -304,7 +228,8 @@ def apply_filters(page):
     for item in checkbox_state.get('items', []):
         print(f"    [{('✓' if item['checked'] else ' ')}] {item['text']}")
 
-    # Now toggle them
+    # ── Step 7: Uncheck all except Reservado ──
+    print("  Setting status = Reservado only...")
     status_result = page.evaluate("""() => {
         const container = document.getElementById('dropdownStatus');
         if (!container) return ['container not found'];
@@ -315,7 +240,7 @@ def apply_filters(page):
         for (const chk of checkboxes) {
             const box = chk.querySelector('.ui-chkbox-box');
             const icon = chk.querySelector('.ui-chkbox-icon');
-            const parent = chk.closest('div');
+            const parent = chk.closest('div, li, tr');
             const label = parent?.querySelector('label');
             const text = label?.textContent.trim() || '';
             const isChecked = box?.classList.contains('ui-state-active') ||
@@ -337,8 +262,9 @@ def apply_filters(page):
         return results;
     }""")
     print(f"  Status changes: {status_result}")
+    page.wait_for_timeout(500)
 
-    # Verify final state
+    # Verify final checkbox state
     final_state = page.evaluate("""() => {
         const container = document.getElementById('dropdownStatus');
         if (!container) return [];
@@ -346,7 +272,7 @@ def apply_filters(page):
         for (const chk of container.querySelectorAll('.ui-chkbox')) {
             const box = chk.querySelector('.ui-chkbox-box');
             const icon = chk.querySelector('.ui-chkbox-icon');
-            const parent = chk.closest('div');
+            const parent = chk.closest('div, li, tr');
             const label = parent?.querySelector('label');
             const text = label?.textContent.trim() || '';
             const isChecked = box?.classList.contains('ui-state-active') ||
@@ -355,13 +281,56 @@ def apply_filters(page):
         }
         return items;
     }""")
+    checked_statuses = [item['text'] for item in final_state if item.get('checked')]
     print("  Final status state:")
     for item in final_state:
         print(f"    [{('✓' if item['checked'] else ' ')}] {item['text']}")
 
-    screenshot(page, "07_status_set")
+    screenshot(page, "06_status_set")
 
-    # ── Step 7: Click "Aplicar" ──
+    # ── Step 8: Verify departure dates weren't cleared by scrolling ──
+    pre_apply_dates = page.evaluate("""() => ({
+        creation_from: document.getElementById('search-form:booking-filters:creationDateFrom_input')?.value || '',
+        creation_to: document.getElementById('search-form:booking-filters:creationDateTo_input')?.value || '',
+        departure_from: document.getElementById('search-form:booking-filters:departureDateFrom_input')?.value || '',
+        departure_to: document.getElementById('search-form:booking-filters:departureDateTo_input')?.value || ''
+    })""")
+    print(f"  Pre-apply dates: {pre_apply_dates}")
+
+    # If departure dates were lost, re-set them
+    if not pre_apply_dates['departure_from'] or not pre_apply_dates['departure_to']:
+        print("  ⚠️ Departure dates were cleared! Re-setting...")
+        page.evaluate(
+            """({ fromDate, toDate }) => {
+                function setVal(id, val) {
+                    const input = document.getElementById(id);
+                    if (!input) return;
+                    const nativeSetter = Object.getOwnPropertyDescriptor(
+                        window.HTMLInputElement.prototype, 'value'
+                    ).set;
+                    nativeSetter.call(input, val);
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+                setVal('search-form:booking-filters:departureDateFrom_input', fromDate);
+                setVal('search-form:booking-filters:departureDateTo_input', toDate);
+            }""",
+            {"fromDate": DATE_FROM, "toDate": DATE_TO},
+        )
+        page.wait_for_timeout(500)
+
+        # Verify again
+        pre_apply_dates = page.evaluate("""() => ({
+            creation_from: document.getElementById('search-form:booking-filters:creationDateFrom_input')?.value || '',
+            creation_to: document.getElementById('search-form:booking-filters:creationDateTo_input')?.value || '',
+            departure_from: document.getElementById('search-form:booking-filters:departureDateFrom_input')?.value || '',
+            departure_to: document.getElementById('search-form:booking-filters:departureDateTo_input')?.value || ''
+        })""")
+        print(f"  After re-set: {pre_apply_dates}")
+
+    screenshot(page, "07_pre_apply")
+
+    # ── Step 9: Click "Aplicar" ──
     print("  Clicking Aplicar...")
     page.evaluate("""() => {
         const buttons = document.querySelectorAll('button, a');
@@ -386,6 +355,9 @@ def apply_filters(page):
         };
     }""")
     print(f"  ✅ After apply. Rows: {result['rowCount']}, Pager: {result['pagerText']}")
+
+    # Save filter params
+    save_filter_params(pre_apply_dates, checked_statuses)
 
 
 def export_excel(page, exporter_id, filepath, label):
@@ -485,6 +457,7 @@ def run():
     print("=" * 60)
     print("DONE ✅")
     print(f"  - {BOOKINGS_FILE}")
+    print(f"  - {PARAMS_FILE}")
     print("=" * 60)
 
 
