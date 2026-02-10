@@ -31,6 +31,16 @@ def upload_file(file_path, folder_id=None):
     creds = authenticate()
     service = build('drive', 'v3', credentials=creds)
 
+    if folder_id:
+        try:
+            # Verify folder exists and is accessible
+            service.files().get(fileId=folder_id).execute()
+            print(f"Target folder '{folder_id}' found and accessible.")
+        except Exception:
+            print(f"Error: Target folder with ID '{folder_id}' not found or not accessible.")
+            print("Please ensure the folder exists and is shared with the Service Account email.")
+            sys.exit(1)
+
     file_name = os.path.basename(file_path)
     
     file_metadata = {'name': file_name}
