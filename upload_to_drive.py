@@ -48,21 +48,6 @@ def upload_file(file_path, folder_id=None):
         else:
             for item in items:
                 print(f"Found folder: {item['name']} ({item['id']})")
-        
-        # DEBUG: Try to create a file in root to verify write permissions
-        print("\n=== DEBUG: Write Test (Root) ===")
-        try:
-             test_metadata = {'name': 'connection_test.txt'}
-             media = MediaIoBaseUpload(BytesIO(b'Hello World'), mimetype='text/plain')
-             new_file = service.files().create(body=test_metadata, media_body=media).execute()
-             print(f"SUCCESS: Created test file in Service Account root. ID: {new_file.get('id')}")
-             # Cleanup
-             service.files().delete(fileId=new_file.get('id')).execute()
-             print("SUCCESS: Deleted test file.")
-             print("CONCLUSION: Service Account is VALID and ACTIVE.")
-             print("            The issue is 100% with the SHARING permissions of the target folder.")
-        except Exception as e:
-             print(f"FAILURE: Could not write to Service Account root. Error: {e}")
         print("==============================\n")
 
     except Exception as e:
