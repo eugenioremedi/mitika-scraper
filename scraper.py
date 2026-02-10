@@ -1,12 +1,12 @@
 import os
-import re
-import base64
+import traceback
 from datetime import datetime, timedelta
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError as PwTimeout
 
 # ======================================================
 # PATHS
 # ======================================================
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -14,11 +14,13 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # ======================================================
 # CONFIG
 # ======================================================
+
 LOGIN_URL = (
     "https://mitika.travel/login.xhtml?"
     "microsite=itravel&keepurl=true&url=%2Fhome%3FtripId%3D64"
 )
-BOOKINGS_URL = "https://mitika.travel/admin/bookings/List.xhtml?reset=true"
+BOOKINGS_URL = "https://mitika.travel/admin/bookings/List.xhtml"
+
 USERNAME = os.environ.get("MITIKA_USERNAME")
 PASSWORD = os.environ.get("MITIKA_PASSWORD")
 
@@ -29,165 +31,435 @@ TODAY = datetime.today()
 DATE_FROM = (TODAY + timedelta(days=10)).strftime("%d/%m/%Y")
 DATE_TO = (TODAY + timedelta(days=360)).strftime("%d/%m/%Y")
 STAMP = TODAY.strftime("%Y_%m_%d")
-EXCEL_FILE = os.path.join(OUTPUT_DIR, f"BOOKINGS_{STAMP}.xlsx")
 
-# ======================================================
-# BASE64 DETECTION (ROBUST)
-# ======================================================
-BASE64_PATTERN = re.compile(
-    r"data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,([A-Za-z0-9+/=\s]+)",
-    re.DOTALL,
-)
+BOOKINGS_FILE = os.path.join(OUTPUT_DIR, f"BOOKINGS_{STAMP}.xlsx")
 
-def extract_excel_from_text(text: str, output_path: str) -> bool:
-    """
-    Busca un data:application/...;base64 en cualquier texto,
-    lo decodifica y guarda el XLSX.
-    Devuelve True si lo encontró.
-    """
-    match = BASE64_PATTERN.search(text)
-    if not match:
-        return False
-    
-    b64 = match.group(1)
-    b64 = re.sub(r"\s+", "", b64)  # limpia saltos de línea
-    
-    data = base64.b64decode(b64)
-    
-    with open(output_path, "wb") as f:
-        f.write(data)
-    
-    return True
+
+def screenshot(page, name):
+    path = os.path.join(OUTPUT_DIR, f"debug_{name}_{STAMP}.png")
+    page.screenshot(path=path, full_page=True)
+    print(f"  📸 {name}")
+
+
+def set_date_input(page, input_id, value):
+    """Set a PrimeFaces date input value reliably."""
+    page.evaluate(
+        """({ inputId, val }) => {
+            const input = document.getElementById(inputId);
+            if (!input) return;
+            // Use native setter to bypass React/PrimeFaces wrappers
+            const nativeSetter = Object.getOwnPropertyDescriptor(
+                window.HTMLInputElement.prototype, 'value'
+            ).set;
+            nativeSetter.call(input, val);
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            input.dispatchEvent(new Event('focus', { bubbles: true }));
+            input.dispatchEvent(new Event('blur', { bubbles: true }));
+        }""",
+        {"inputId": input_id, "val": value},
+    )
+
+
+def scroll_filter_sidebar(page):
+    """Scroll the filter sidebar to the bottom."""
+    page.evaluate("""() => {
+        const scroller = document.querySelector('.c-hidden-aside__scroller') ||
+                         document.getElementById('c-hidden-aside--booking-filters') ||
+                         document.querySelector('#search-form\\\\:booking-filters\\\\:search-form');
+        if (scroller) scroller.scrollTop = scroller.scrollHeight;
+    }""")
+
 
 # ======================================================
 # STEPS
 # ======================================================
+
 def login(page):
+    print("[1/3] Logging in...")
     page.goto(LOGIN_URL, timeout=60000)
+    page.wait_for_load_state("networkidle")
+
     page.fill("#login-form\\:login-content\\:login\\:Email", USERNAME)
     page.fill("#login-form\\:login-content\\:login\\:j_password", PASSWORD)
     page.click("button:has-text('Siguiente')")
-    
-    if page.locator("button:has-text('Aceptar todo')").count():
-        page.click("button:has-text('Aceptar todo')")
-    
+
+    try:
+        accept_btn = page.locator("button:has-text('Aceptar todo')")
+        if accept_btn.count():
+            accept_btn.click(timeout=5000)
+    except PwTimeout:
+        pass
+
     page.wait_for_load_state("networkidle")
+    screenshot(page, "01_after_login")
+
+    if "login" in page.url.lower():
+        raise RuntimeError(f"Login failed. Still on: {page.url}")
+
+    print(f"  ✅ Logged in. URL: {page.url}")
+
 
 def apply_filters(page):
+    print("[2/3] Applying filters...")
     page.goto(BOOKINGS_URL, timeout=60000)
     page.wait_for_load_state("networkidle")
-    
-    # Abrir filtros
-    page.evaluate("() => document.querySelector('#clickOtherFilters')?.click()")
-    page.wait_for_timeout(2000)
-    
-    # Limpiar fechas de creación
-    page.evaluate("() => document.querySelector('button.dev-clear-dates')?.click()")
-    
-    # Fechas de salida
-    page.evaluate(
-        """({ fromDate, toDate }) => {
-            const f = document.getElementById(
-                'search-form:booking-filters:departureDateFrom_input'
-            );
-            const t = document.getElementById(
-                'search-form:booking-filters:departureDateTo_input'
-            );
-            if (f && t) {
-                f.value = fromDate;
-                t.value = toDate;
-                f.dispatchEvent(new Event('change', { bubbles: true }));
-                t.dispatchEvent(new Event('change', { bubbles: true }));
-            }
-        }""",
-        {"fromDate": DATE_FROM, "toDate": DATE_TO},
-    )
-    
-    # Estado = solo Reservado
-    page.evaluate(
-        """
-        () => {
-            document.querySelectorAll('.ui-chkbox-box').forEach(e => {
-                const active = e.classList.contains('ui-state-active');
-                const isReservado = e.textContent.includes('Reservado');
-                if (active && !isReservado) e.click();
-                if (!active && isReservado) e.click();
-            });
-        }
-        """
-    )
-    
-    # Aplicar filtros
-    page.evaluate("() => document.querySelector('button.applyFilters')?.click()")
-    page.wait_for_load_state("networkidle")
+    screenshot(page, "02_bookings_loaded")
 
-def export_excel_from_base64(page):
-    """
-    Dispara el export PrimeFaces y escanea TODAS las responses
-    hasta encontrar el Excel embebido en base64.
-    """
-    found = {"ok": False}
-    
-    def on_response(response):
-        if found["ok"]:
-            return
-        try:
-            text = response.text()
-        except Exception:
-            return
-        if extract_excel_from_text(text, EXCEL_FILE):
-            found["ok"] = True
-    
-    # Add listener
-    page.on("response", on_response)
-    
-    # Disparar EXACTAMENTE el onclick real
-    page.evaluate(
-        """
-        () => {
-            PrimeFaces.monitorDataExporterDownload(
-                travelc.admin.blockPage,
-                travelc.admin.unblockPage
-            );
-            PrimeFaces.ab({
-                s: 'search-form:services:export-services:excel-exporter',
-                f: 'search-form'
-            });
+    # ── Step 1: Open the Filtros sidebar ──
+    print("  Opening filters sidebar...")
+    page.locator("a.dev-open-filters").click()
+    page.wait_for_timeout(2000)
+    screenshot(page, "03_filters_opened")
+
+    # ── Step 2: Clear creation dates ──
+    print("  Clearing creation dates...")
+    page.evaluate("""() => {
+        const all = document.querySelectorAll('button, a');
+        for (const el of all) {
+            if (el.textContent.trim() === 'Eliminar fechas') {
+                el.click();
+                return;
+            }
         }
-        """
-    )
-    
-    # Esperar hasta que aparezca el Excel (máx 2 min)
-    page.wait_for_timeout(120000)
-    
-    # Remove listener - CORRECTED: use remove_listener instead of off
-    page.remove_listener("response", on_response)
-    
-    if not found["ok"]:
-        raise RuntimeError("No se pudo capturar el Excel desde ninguna response")
+    }""")
+    page.wait_for_timeout(1000)
+
+    cleared = page.evaluate("""() => ({
+        from: document.getElementById('search-form:booking-filters:creationDateFrom_input')?.value || '',
+        to: document.getElementById('search-form:booking-filters:creationDateTo_input')?.value || ''
+    })""")
+    print(f"  Creation dates: from='{cleared['from']}', to='{cleared['to']}'")
+
+    # ── Step 3: Expand "Fecha de salida" and set BOTH departure dates ──
+    print("  Expanding 'Fecha de salida'...")
+    page.locator("text=Fecha de salida").first.click()
+    page.wait_for_timeout(1500)
+
+    print(f"  Setting departure Desde: {DATE_FROM}")
+    set_date_input(page, "search-form:booking-filters:departureDateFrom_input", DATE_FROM)
+    page.wait_for_timeout(500)
+
+    # Dismiss any calendar popup that might have appeared by clicking elsewhere
+    page.evaluate("""() => {
+        const overlay = document.querySelector('.p-datepicker-panel, .ui-datepicker');
+        if (overlay) overlay.style.display = 'none';
+    }""")
+    page.wait_for_timeout(300)
+
+    print(f"  Setting departure Hasta: {DATE_TO}")
+    set_date_input(page, "search-form:booking-filters:departureDateTo_input", DATE_TO)
+    page.wait_for_timeout(500)
+
+    # Dismiss calendar again
+    page.evaluate("""() => {
+        const overlay = document.querySelector('.p-datepicker-panel, .ui-datepicker');
+        if (overlay) overlay.style.display = 'none';
+    }""")
+    page.wait_for_timeout(300)
+
+    # Verify both dates
+    dep_dates = page.evaluate("""() => ({
+        from: document.getElementById('search-form:booking-filters:departureDateFrom_input')?.value || '',
+        to: document.getElementById('search-form:booking-filters:departureDateTo_input')?.value || ''
+    })""")
+    print(f"  Departure dates: from='{dep_dates['from']}', to='{dep_dates['to']}'")
+    screenshot(page, "04_dates_set")
+
+    # ── Step 4: Scroll down to Estado section ──
+    print("  Scrolling to Estado...")
+    scroll_filter_sidebar(page)
+    page.wait_for_timeout(1000)
+
+    # ── Step 5: Expand "Estado" accordion ──
+    # The Estado section is a collapsible accordion — we need to click the header
+    # From screenshot 5, it shows as "Estado ▼" (collapsed)
+    print("  Expanding 'Estado' accordion...")
+
+    # Try clicking the Estado header text within the filter sidebar
+    estado_clicked = page.evaluate("""() => {
+        const sidebar = document.getElementById('c-hidden-aside--booking-filters');
+        if (!sidebar) return 'sidebar_not_found';
+
+        // Look for clickable elements containing exactly "Estado"
+        const clickables = sidebar.querySelectorAll(
+            'h2, h3, h4, summary, [role="button"], .u-cursor--pointer, ' +
+            'div[class*="collaps"], div[class*="accordion"], a, button, span'
+        );
+        for (const el of clickables) {
+            // Match elements where the direct text is "Estado" (not children containing other text)
+            const directText = Array.from(el.childNodes)
+                .filter(n => n.nodeType === 3)
+                .map(n => n.textContent.trim())
+                .join('');
+            const fullText = el.textContent.trim();
+
+            if (directText === 'Estado' || fullText === 'Estado') {
+                el.click();
+                return 'clicked: ' + el.tagName + '.' + el.className.substring(0, 40);
+            }
+        }
+        return 'not_found';
+    }""")
+    print(f"  Estado expand: {estado_clicked}")
+    page.wait_for_timeout(1500)
+
+    # If that didn't work, try the Playwright locator approach
+    if "not_found" in str(estado_clicked):
+        print("  Retrying with locator...")
+        try:
+            # The "Estado" text in the sidebar
+            estado_loc = page.locator("#c-hidden-aside--booking-filters >> text=Estado").first
+            estado_loc.click()
+            page.wait_for_timeout(1500)
+            print("  Locator click succeeded")
+        except Exception as e:
+            print(f"  ⚠️ Locator failed: {e}")
+
+    # Scroll again after expanding to make sure checkboxes are visible
+    scroll_filter_sidebar(page)
+    page.wait_for_timeout(500)
+
+    screenshot(page, "05_estado_expanded")
+
+    # ── Step 6: Check if the status checkboxes are now visible ──
+    checkbox_info = page.evaluate("""() => {
+        const container = document.getElementById('dropdownStatus');
+        if (!container) return { error: 'dropdownStatus not found' };
+
+        const visible = container.offsetParent !== null;
+        const height = container.offsetHeight;
+        const checkboxes = container.querySelectorAll('.ui-chkbox');
+
+        const items = [];
+        for (const chk of checkboxes) {
+            const box = chk.querySelector('.ui-chkbox-box');
+            const icon = chk.querySelector('.ui-chkbox-icon');
+            const parent = chk.closest('div');
+            const label = parent?.querySelector('label');
+            const text = label?.textContent.trim() || '';
+            const isChecked = box?.classList.contains('ui-state-active') ||
+                              icon?.classList.contains('ui-icon-check');
+            items.push({ text, checked: isChecked });
+        }
+
+        return { visible, height, count: checkboxes.length, items };
+    }""")
+    print(f"  Status container visible: {checkbox_info.get('visible')}, "
+          f"height: {checkbox_info.get('height')}, "
+          f"checkboxes: {checkbox_info.get('count')}")
+    for item in checkbox_info.get('items', []):
+        print(f"    [{('✓' if item['checked'] else ' ')}] {item['text']}")
+
+    # If container not visible or no checkboxes found, try expanding differently
+    if checkbox_info.get('count', 0) == 0 or not checkbox_info.get('visible', False):
+        print("  ⚠️ Checkboxes not accessible, trying #dropdownStatus click...")
+        page.evaluate("""() => {
+            const dd = document.getElementById('dropdownStatus');
+            if (dd) {
+                dd.style.display = 'block';
+                dd.style.visibility = 'visible';
+                dd.style.height = 'auto';
+                dd.style.overflow = 'visible';
+            }
+        }""")
+        page.wait_for_timeout(500)
+
+    # ── Step 7: Uncheck all statuses, keep only "Reservado" ──
+    print("  Setting status = Reservado only...")
+    status_result = page.evaluate("""() => {
+        const container = document.getElementById('dropdownStatus');
+        if (!container) return ['dropdownStatus not found'];
+
+        const results = [];
+        const checkboxes = container.querySelectorAll('.ui-chkbox');
+
+        for (const chk of checkboxes) {
+            const box = chk.querySelector('.ui-chkbox-box');
+            const icon = chk.querySelector('.ui-chkbox-icon');
+            const parent = chk.closest('div');
+            const label = parent?.querySelector('label');
+            const text = label?.textContent.trim() || '';
+            const isChecked = box?.classList.contains('ui-state-active') ||
+                              icon?.classList.contains('ui-icon-check');
+
+            if (text === 'Reservado') {
+                if (!isChecked) {
+                    box?.click();
+                    results.push('checked: Reservado');
+                } else {
+                    results.push('already checked: Reservado');
+                }
+            } else if (text) {
+                if (isChecked) {
+                    box?.click();
+                    results.push('unchecked: ' + text);
+                }
+            }
+        }
+
+        return results;
+    }""")
+    print(f"  Status changes: {status_result}")
+
+    # Verify final state
+    final_state = page.evaluate("""() => {
+        const container = document.getElementById('dropdownStatus');
+        if (!container) return [];
+        const items = [];
+        const checkboxes = container.querySelectorAll('.ui-chkbox');
+        for (const chk of checkboxes) {
+            const box = chk.querySelector('.ui-chkbox-box');
+            const icon = chk.querySelector('.ui-chkbox-icon');
+            const parent = chk.closest('div');
+            const label = parent?.querySelector('label');
+            const text = label?.textContent.trim() || '';
+            const isChecked = box?.classList.contains('ui-state-active') ||
+                              icon?.classList.contains('ui-icon-check');
+            items.push({ text, checked: isChecked });
+        }
+        return items;
+    }""")
+    print("  Final status state:")
+    for item in final_state:
+        print(f"    [{('✓' if item['checked'] else ' ')}] {item['text']}")
+
+    screenshot(page, "06_status_set")
+
+    # ── Step 8: Click "Aplicar" ──
+    print("  Clicking Aplicar...")
+    page.evaluate("""() => {
+        const buttons = document.querySelectorAll('button, a');
+        for (const btn of buttons) {
+            if (btn.textContent.trim() === 'Aplicar') {
+                btn.click();
+                return;
+            }
+        }
+    }""")
+
+    page.wait_for_load_state("networkidle")
+    page.wait_for_timeout(5000)
+    screenshot(page, "07_after_apply")
+
+    result = page.evaluate("""() => {
+        const rows = document.querySelectorAll('table tbody tr');
+        const pager = document.querySelector('.ui-paginator-current');
+        return {
+            rowCount: rows.length,
+            pagerText: pager ? pager.textContent.trim() : 'no pager'
+        };
+    }""")
+    print(f"  ✅ After apply. Rows: {result['rowCount']}, Pager: {result['pagerText']}")
+
+
+def export_excel(page, exporter_id, filepath, label):
+    print(f"[3/3] Export {label} → {filepath}")
+
+    exists = page.evaluate(f'() => !!document.getElementById("{exporter_id}")')
+    print(f"  Exporter exists: {exists}")
+
+    if not exists:
+        snippet = page.evaluate("""() => {
+            const els = document.querySelectorAll('[id*="export"], [id*="excel"], [id*="Export"]');
+            return Array.from(els).map(e => e.id + ' (' + e.tagName + ')').join('\\n') || 'none';
+        }""")
+        print(f"  Export elements:\\n{snippet}")
+        screenshot(page, "export_missing")
+
+    # Strategy 1: click + expect_download
+    try:
+        print("  Strategy 1: el.click() + expect_download ...")
+        with page.expect_download(timeout=30000) as dl_info:
+            page.evaluate(f"""() => {{
+                const el = document.getElementById("{exporter_id}");
+                if (el) el.click();
+            }}""")
+        dl_info.value.save_as(filepath)
+        print(f"  ✅ Strategy 1 worked!")
+        return
+    except PwTimeout:
+        print("  ⏱️  Strategy 1 timed out.")
+
+    # Strategy 2: PrimeFaces.ab + expect_download
+    try:
+        print("  Strategy 2: PrimeFaces.ab() + expect_download ...")
+        with page.expect_download(timeout=30000) as dl_info:
+            page.evaluate(f"""() => {{
+                if (typeof PrimeFaces !== 'undefined' && PrimeFaces.ab) {{
+                    try {{ PrimeFaces.monitorDataExporterDownload(() => {{}}, () => {{}}); }} catch(e) {{}}
+                    PrimeFaces.ab({{ s: "{exporter_id}", f: "search-form" }});
+                }}
+            }}""")
+        dl_info.value.save_as(filepath)
+        print(f"  ✅ Strategy 2 worked!")
+        return
+    except PwTimeout:
+        print("  ⏱️  Strategy 2 timed out.")
+
+    # Strategy 3: expect_response
+    try:
+        print("  Strategy 3: expect_response ...")
+        with page.expect_response(
+            lambda r: "attachment" in r.headers.get("content-disposition", ""),
+            timeout=60000,
+        ) as resp_info:
+            page.evaluate(f"""() => {{
+                if (typeof PrimeFaces !== 'undefined' && PrimeFaces.ab) {{
+                    try {{ PrimeFaces.monitorDataExporterDownload(() => {{}}, () => {{}}); }} catch(e) {{}}
+                    PrimeFaces.ab({{ s: "{exporter_id}", f: "search-form" }});
+                }}
+            }}""")
+        body = resp_info.value.body()
+        with open(filepath, "wb") as f:
+            f.write(body)
+        print(f"  ✅ Strategy 3 worked! ({len(body)} bytes)")
+        return
+    except PwTimeout:
+        print("  ⏱️  Strategy 3 timed out.")
+
+    screenshot(page, f"export_FAILED_{label}")
+    raise RuntimeError(f"All export strategies failed for {label}")
+
 
 # ======================================================
 # MAIN
 # ======================================================
+
 def run():
-    print("Starting Mitika Excel export (PrimeFaces base64 robust)")
-    print(f"Output directory: {OUTPUT_DIR}")
+    print("=" * 60)
+    print("Starting scraper...")
+    print(f"Output: {OUTPUT_DIR}")
     print(f"Dates: {DATE_FROM} → {DATE_TO}")
-    
+    print("=" * 60)
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        context = browser.new_context()
+        context = browser.new_context(accept_downloads=True)
         page = context.new_page()
-        
-        login(page)
-        apply_filters(page)
-        export_excel_from_base64(page)
-        
-        context.close()
-        browser.close()
-    
-    print("DONE")
-    print(f"- {EXCEL_FILE}")
+
+        try:
+            login(page)
+            apply_filters(page)
+            export_excel(
+                page,
+                "search-form:BOOKINGS:export-bookings:excel-exporter",
+                BOOKINGS_FILE,
+                "BOOKINGS",
+            )
+        except Exception:
+            screenshot(page, "CRASH")
+            traceback.print_exc()
+            raise
+        finally:
+            context.close()
+            browser.close()
+
+    print("=" * 60)
+    print("DONE ✅")
+    print(f"  - {BOOKINGS_FILE}")
+    print("=" * 60)
+
 
 if __name__ == "__main__":
     run()
