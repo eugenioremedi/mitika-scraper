@@ -2,7 +2,6 @@ name: Daily Mitika Scraper
 
 on:
   schedule:
-    # Todos los días a las 07:00 UTC
     - cron: "0 7 * * *"
   workflow_dispatch:
 
@@ -20,7 +19,9 @@ jobs:
           python-version: "3.11"
 
       - name: Install Python dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
+          pip install google-api-python-client google-auth
 
       - name: Install Playwright browsers
         run: playwright install chromium
@@ -30,6 +31,18 @@ jobs:
         env:
           MITIKA_USERNAME: ${{ secrets.MITIKA_USERNAME }}
           MITIKA_PASSWORD: ${{ secrets.MITIKA_PASSWORD }}
+
+      - name: Upload to Google Drive
+        run: |
+          FILE_TO_UPLOAD=$(find output -name "BOOKINGS_*.xlsx" | head -n 1)
+          if [ -z "$FILE_TO_UPLOAD" ]; then
+            echo "No file found to upload!"
+            exit 1
+          fi
+          echo "Found file: $FILE_TO_UPLOAD"
+          python upload_to_drive.py "$FILE_TO_UPLOAD" "${{ secrets.GDRIVE_FOLDER_ID }}"
+        env:
+          GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
 
       - name: Upload output (screenshots + files)
         if: always()
