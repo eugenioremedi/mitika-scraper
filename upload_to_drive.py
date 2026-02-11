@@ -1,29 +1,35 @@
 import os
 import sys
-from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-import json
 
-# Expects the service account JSON key to be in the environment variable 'GDRIVE_SERVICE_ACCOUNT_KEY'
-SERVICE_ACCOUNT_ENV_VAR = 'GDRIVE_SERVICE_ACCOUNT_KEY'
 SCOPES = ['https://www.googleapis.com/auth/drive']
 
 
 def authenticate():
-    creds = None
-    if SERVICE_ACCOUNT_ENV_VAR in os.environ:
-        try:
-            service_account_info = json.loads(os.environ[SERVICE_ACCOUNT_ENV_VAR])
-            creds = service_account.Credentials.from_service_account_info(
-                service_account_info, scopes=SCOPES)
-        except json.JSONDecodeError:
-            print(f"Error: {SERVICE_ACCOUNT_ENV_VAR} environment variable is not valid JSON.")
-            sys.exit(1)
-    else:
-        print(f"Error: Environment variable {SERVICE_ACCOUNT_ENV_VAR} not found.")
+    """Authenticate using OAuth refresh token (works with personal Google accounts)."""
+    client_id = os.environ.get('GDRIVE_CLIENT_ID')
+    client_secret = os.environ.get('GDRIVE_CLIENT_SECRET')
+    refresh_token = os.environ.get('GDRIVE_REFRESH_TOKEN')
+
+    if not all([client_id, client_secret, refresh_token]):
+        print("Error: Missing environment variables.")
+        print("Required: GDRIVE_CLIENT_ID, GDRIVE_CLIENT_SECRET, GDRIVE_REFRESH_TOKEN")
         sys.exit(1)
 
+    creds = Credentials(
+        token=None,
+        refresh_token=refresh_token,
+        client_id=client_id,
+        client_secret=client_secret,
+        token_uri='https://oauth2.googleapis.com/token',
+        scopes=SCOPES
+    )
+
+    # Refresh the access token
+    creds.refresh(Request())
     return creds
 
 
@@ -31,33 +37,14 @@ def upload_file(file_path, folder_id=None):
     creds = authenticate()
     service = build('drive', 'v3', credentials=creds)
 
-    # Print the service account email for debugging
+    # Print account info for debugging
     try:
         about = service.about().get(fields="user(emailAddress)").execute()
         print(f"Authenticated as: {about['user']['emailAddress']}")
-
-        # DEBUG: List all folders this account can see
-        print("\n=== DEBUG: Visible Folders ===")
-        results = service.files().list(
-            q="mimeType = 'application/vnd.google-apps.folder' and trashed = false",
-            pageSize=10,
-            fields="nextPageToken, files(id, name)",
-            supportsAllDrives=True,
-            includeItemsFromAllDrives=True
-        ).execute()
-        items = results.get('files', [])
-        if not items:
-            print("No visible folders found. Ensure you have shared the folder with the service account.")
-        else:
-            for item in items:
-                print(f"Found folder: {item['name']} ({item['id']})")
-        print("==============================\n")
-
     except Exception as e:
-        print(f"Could not determine Service Account details: {e}")
+        print(f"Could not determine account details: {e}")
 
     if folder_id:
-        # Sanitize folder_id in case user pasted the full URL
         folder_id = folder_id.strip()
         if "drive.google.com" in folder_id:
             parts = folder_id.split("/")
@@ -65,64 +52,49 @@ def upload_file(file_path, folder_id=None):
             if "?" in folder_id:
                 folder_id = folder_id.split("?")[0]
 
-        # Print masked folder ID for debugging
         masked_id = folder_id[:4] + "..." + folder_id[-4:] if len(folder_id) > 8 else "***"
         print(f"Using Folder ID: {masked_id}")
 
         try:
-            # Verify folder exists and is accessible
-            service.files().get(
-                fileId=folder_id,
-                supportsAllDrives=True
-            ).execute()
-            print(f"Target folder '{masked_id}' found and accessible.")
+            service.files().get(fileId=folder_id).execute()
+            print(f"Target folder found and accessible.")
         except Exception as e:
-            print(f"Error: Target folder with ID '{masked_id}' not found or not accessible.")
+            print(f"Error: Folder '{masked_id}' not found or not accessible.")
             print(f"Details: {e}")
-            print("Please ensure the folder exists and is shared with the Service Account email.")
             sys.exit(1)
 
     file_name = os.path.basename(file_path)
-
-    file_metadata = {'name': file_name}
-    if folder_id:
-        file_metadata['parents'] = [folder_id]
-
     media = MediaFileUpload(file_path, resumable=True)
 
     try:
-        # Check if file already exists in the folder to update it instead of creating a duplicate
+        # Check if file already exists to update instead of duplicating
         if folder_id:
             query = f"name = '{file_name}' and '{folder_id}' in parents and trashed = false"
-            results = service.files().list(
-                q=query,
-                fields="files(id)",
-                supportsAllDrives=True,
-                includeItemsFromAllDrives=True
-            ).execute()
-            items = results.get('files', [])
+            results = service.files().list(q=query, fields="files(id)").execute()
+            existing = results.get('files', [])
 
-            if items:
-                # Update existing file
-                file_id = items[0]['id']
-                print(f"File '{file_name}' already exists with ID: {file_id}. Updating...")
+            if existing:
+                file_id = existing[0]['id']
+                print(f"File '{file_name}' already exists. Updating...")
                 updated_file = service.files().update(
                     fileId=file_id,
-                    media_body=media,
-                    supportsAllDrives=True
+                    media_body=media
                 ).execute()
                 print(f"File updated. ID: {updated_file.get('id')}")
                 return
 
-        # Create new file
+        # Upload new file
         print(f"Uploading '{file_name}'...")
+        file_metadata = {'name': file_name}
+        if folder_id:
+            file_metadata['parents'] = [folder_id]
+
         file = service.files().create(
             body=file_metadata,
             media_body=media,
-            fields='id',
-            supportsAllDrives=True
+            fields='id'
         ).execute()
-        print(f"File uploaded. ID: {file.get('id')}")
+        print(f"File uploaded successfully. ID: {file.get('id')}")
 
     except Exception as e:
         print(f"An error occurred: {e}")
