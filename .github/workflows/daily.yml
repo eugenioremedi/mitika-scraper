@@ -21,7 +21,7 @@ jobs:
       - name: Install Python dependencies
         run: |
           pip install -r requirements.txt
-          pip install google-api-python-client google-auth
+          pip install google-api-python-client google-auth google-auth-oauthlib
 
       - name: Install Playwright browsers
         run: playwright install chromium
@@ -42,7 +42,9 @@ jobs:
           echo "Found file: $FILE_TO_UPLOAD"
           python upload_to_drive.py "$FILE_TO_UPLOAD" "${{ secrets.GDRIVE_FOLDER_ID }}"
         env:
-          GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
+          GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+          GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+          GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
 
       - name: Upload output (screenshots + files)
         if: always()
