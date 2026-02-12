@@ -53,7 +53,7 @@ if not USERNAME or not PASSWORD:
 TODAY = datetime.today()
 DATE_FROM = (TODAY + timedelta(days=10)).strftime("%d/%m/%Y")
 DATE_TO = (TODAY + timedelta(days=360)).strftime("%d/%m/%Y")
-STAMP = TODAY.strftime("%Y_%m_%d")
+STAMP = TODAY.strftime("%Y_%m_%d_%H%M")
 
 BOOKINGS_FILE = os.path.join(OUTPUT_DIR, f"BOOKINGS_{STAMP}.xlsx")
 SERVICES_FILE = os.path.join(OUTPUT_DIR, f"SERVICES_{STAMP}.xlsx")
