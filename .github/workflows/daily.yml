@@ -34,13 +34,14 @@ jobs:
 
       - name: Upload to Google Drive
         run: |
-          FILE_TO_UPLOAD=$(find output -name "BOOKINGS_*.xlsx" | head -n 1)
-          if [ -z "$FILE_TO_UPLOAD" ]; then
-            echo "No file found to upload!"
-            exit 1
-          fi
-          echo "Found file: $FILE_TO_UPLOAD"
-          python upload_to_drive.py "$FILE_TO_UPLOAD" "${{ secrets.GDRIVE_FOLDER_ID }}"
+          for FILE_TO_UPLOAD in output/BOOKINGS_*.xlsx output/FILTER_PARAMS_*.txt; do
+            if [ -f "$FILE_TO_UPLOAD" ]; then
+              echo "Uploading: $FILE_TO_UPLOAD"
+              python upload_to_drive.py "$FILE_TO_UPLOAD" "${{ secrets.GDRIVE_FOLDER_ID }}"
+            else
+              echo "Not found: $FILE_TO_UPLOAD (skipping)"
+            fi
+          done
         env:
           GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
           GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
