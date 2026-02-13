@@ -22,7 +22,10 @@ Usage:
 import os
 import time
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+# Timezone: Argentina (UTC-3)
+AR_TZ = timezone(timedelta(hours=-3))
 from playwright.sync_api import sync_playwright, TimeoutError as PwTimeout
 
 # ======================================================
@@ -50,7 +53,7 @@ PASSWORD = os.environ.get("MITIKA_PASSWORD")
 if not USERNAME or not PASSWORD:
     raise RuntimeError("MITIKA_USERNAME and MITIKA_PASSWORD must be set")
 
-TODAY = datetime.today()
+TODAY = datetime.now(AR_TZ)
 DATE_FROM = (TODAY + timedelta(days=10)).strftime("%d/%m/%Y")
 DATE_TO = (TODAY + timedelta(days=360)).strftime("%d/%m/%Y")
 STAMP = TODAY.strftime("%Y_%m_%d_%H%M")
